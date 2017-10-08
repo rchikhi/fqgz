@@ -217,6 +217,19 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor *decompressor,
 			      size_t *actual_out_nbytes_ret);
 
 /*
+ * Like libdeflate_deflate_decompress(), buts adds the 'actual_in_nbytes_ret'
+ * argument.  If decompression succeeds and 'actual_in_nbytes_ret' is not NULL,
+ * then the actual compressed size of the DEFLATE stream (aligned to the next
+ * byte boundary) is written to *actual_in_nbytes_ret.
+ */
+LIBDEFLATEAPI enum libdeflate_result
+libdeflate_deflate_decompress_ext(struct libdeflate_decompressor *decompressor,
+				  const void *in, size_t in_nbytes,
+				  void *out, size_t out_nbytes_avail,
+				  size_t *actual_in_nbytes_ret,
+				  size_t *actual_out_nbytes_ret);
+
+/*
  * Like libdeflate_deflate_decompress(), but assumes the zlib wrapper format
  * instead of raw DEFLATE.
  */
@@ -229,12 +242,30 @@ libdeflate_zlib_decompress(struct libdeflate_decompressor *decompressor,
 /*
  * Like libdeflate_deflate_decompress(), but assumes the gzip wrapper format
  * instead of raw DEFLATE.
+ *
+ * If multiple gzip-compressed members are concatenated, then only the first
+ * will be decompressed.  Use libdeflate_gzip_decompress_ext() if you need
+ * multi-member support.
  */
 LIBDEFLATEAPI enum libdeflate_result
 libdeflate_gzip_decompress(struct libdeflate_decompressor *decompressor,
 			   const void *in, size_t in_nbytes,
 			   void *out, size_t out_nbytes_avail,
 			   size_t *actual_out_nbytes_ret);
+
+/*
+ * Like libdeflate_gzip_decompress(), but adds the 'actual_in_nbytes_ret'
+ * argument.  If 'actual_in_nbytes_ret' is not NULL and the decompression
+ * succeeds (indicating that the first gzip-compressed member in the input
+ * buffer was decompressed), then the actual number of input bytes consumed is
+ * written to *actual_in_nbytes_ret.
+ */
+LIBDEFLATEAPI enum libdeflate_result
+libdeflate_gzip_decompress_ext(struct libdeflate_decompressor *decompressor,
+			       const void *in, size_t in_nbytes,
+			       void *out, size_t out_nbytes_avail,
+			       size_t *actual_in_nbytes_ret,
+			       size_t *actual_out_nbytes_ret);
 
 /*
  * libdeflate_free_decompressor() frees a decompressor that was allocated with
