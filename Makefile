@@ -17,16 +17,15 @@
 #### Flags given here are not intended to be overridden, but you can add more
 #### by defining CFLAGS in the environment or on the 'make' command line.
 
-cc-option = $(shell if $(CC) $(1) -c -x c /dev/null -o /dev/null \
+cc-option = $(shell if $(CXX) $(1) -c -x c /dev/null -o /dev/null \
 	      1>&2 2>/dev/null; then echo $(1); fi)
 
 override CFLAGS :=							\
-	$(CFLAGS) -O2 -fomit-frame-pointer -std=c99 -I. -Icommon	\
+	$(CFLAGS) -O2 -fomit-frame-pointer -std=c++17 -I. -Icommon	\
+	-Iexternal/type_safe/include					\
+	-Iexternal/type_safe/external/debug_assert			\
 	-Wall -Wundef							\
 	$(call cc-option,-Wpedantic)					\
-	$(call cc-option,-Wdeclaration-after-statement)			\
-	$(call cc-option,-Wmissing-prototypes)				\
-	$(call cc-option,-Wstrict-prototypes)				\
 	$(call cc-option,-Wvla)
 
 ##############################################################################
@@ -39,7 +38,7 @@ PROG_CFLAGS       :=
 HARD_LINKS        := 1
 
 # Compiling for Windows with MinGW?
-ifneq ($(findstring -mingw,$(shell $(CC) -dumpmachine 2>/dev/null)),)
+ifneq ($(findstring -mingw,$(shell $(CXX) -dumpmachine 2>/dev/null)),)
     STATIC_LIB_SUFFIX := .lib
     SHARED_LIB_SUFFIX := .dll
     SHARED_LIB_CFLAGS :=
@@ -48,12 +47,12 @@ ifneq ($(findstring -mingw,$(shell $(CC) -dumpmachine 2>/dev/null)),)
     HARD_LINKS        :=
     override CFLAGS   := $(CFLAGS) $(call cc-option,-Wno-pedantic-ms-format)
 
-    # If AR was not already overridden, then derive it from $(CC).
+    # If AR was not already overridden, then derive it from $(CXX).
     # Note that CC may take different forms, e.g. "cc", "gcc",
     # "x86_64-w64-mingw32-gcc", or "x86_64-w64-mingw32-gcc-6.3.1".
     # On Windows it may also have a .exe extension.
     ifeq ($(AR),ar)
-        AR := $(shell echo $(CC) | \
+        AR := $(shell echo $(CXX) | \
                 sed -E 's/g?cc(-?[0-9]+(\.[0-9]+)*)?(\.exe)?$$/ar\3/')
     endif
 endif
@@ -64,7 +63,7 @@ endif
 
 ifneq ($(findstring s,$(MAKEFLAGS)),s)
 ifneq ($(V),1)
-        QUIET_CC       = @echo '  CC      ' $@;
+        QUIET_CC       = @echo '  CXX     ' $@;
         QUIET_CCLD     = @echo '  CCLD    ' $@;
         QUIET_AR       = @echo '  AR      ' $@;
         QUIET_LN       = @echo '  LN      ' $@;
@@ -88,26 +87,8 @@ LIB_CFLAGS += $(CFLAGS) -fvisibility=hidden -D_ANSI_SOURCE
 LIB_HEADERS := $(wildcard lib/*.h)
 
 LIB_SRC := lib/aligned_malloc.c lib/deflate_decompress.c lib/x86_cpu_features.c
-
-DECOMPRESSION_ONLY :=
-ifndef DECOMPRESSION_ONLY
-    LIB_SRC += lib/deflate_compress.c
-endif
-
-DISABLE_ZLIB :=
-ifndef DISABLE_ZLIB
-    LIB_SRC += lib/adler32.c lib/zlib_decompress.c
-    ifndef DECOMPRESSION_ONLY
-        LIB_SRC += lib/zlib_compress.c
-    endif
-endif
-
-DISABLE_GZIP :=
 ifndef DISABLE_GZIP
-    LIB_SRC += lib/crc32.c lib/gzip_decompress.c
-    ifndef DECOMPRESSION_ONLY
-        LIB_SRC += lib/gzip_compress.c
-    endif
+    LIB_SRC += lib/gzip_decompress.c
 endif
 
 STATIC_LIB_OBJ := $(LIB_SRC:.c=.o)
@@ -115,11 +96,11 @@ SHARED_LIB_OBJ := $(LIB_SRC:.c=.shlib.o)
 
 # Compile static library object files
 $(STATIC_LIB_OBJ): %.o: %.c $(LIB_HEADERS) $(COMMON_HEADERS) .lib-cflags
-	$(QUIET_CC) $(CC) -o $@ -c $(LIB_CFLAGS) $<
+	$(QUIET_CC) $(CXX) -o $@ -c $(LIB_CFLAGS) $<
 
 # Compile shared library object files
 $(SHARED_LIB_OBJ): %.shlib.o: %.c $(LIB_HEADERS) $(COMMON_HEADERS) .lib-cflags
-	$(QUIET_CC) $(CC) -o $@ -c $(LIB_CFLAGS) $(SHARED_LIB_CFLAGS) -DLIBDEFLATE_DLL $<
+	$(QUIET_CC) $(CXX) -o $@ -c $(LIB_CFLAGS) $(SHARED_LIB_CFLAGS) -DLIBDEFLATE_DLL $<
 
 # Create static library
 $(STATIC_LIB):$(STATIC_LIB_OBJ)
@@ -129,13 +110,13 @@ DEFAULT_TARGETS += $(STATIC_LIB)
 
 # Create shared library
 $(SHARED_LIB):$(SHARED_LIB_OBJ)
-	$(QUIET_CCLD) $(CC) -o $@ $(LDFLAGS) $(LIB_CFLAGS) -shared $+
+	$(QUIET_CCLD) $(CXX) -o $@ $(LDFLAGS) $(LIB_CFLAGS) -shared $+
 
 DEFAULT_TARGETS += $(SHARED_LIB)
 
 # Rebuild if CC or LIB_CFLAGS changed
 .lib-cflags: FORCE
-	@flags='$(CC):$(LIB_CFLAGS)'; \
+	@flags='$(CXX):$(LIB_CFLAGS)'; \
 	if [ "$$flags" != "`cat $@ 2>/dev/null`" ]; then \
 		[ -e $@ ] && echo "Rebuilding library due to new compiler flags"; \
 		echo "$$flags" > $@; \
@@ -167,11 +148,11 @@ PROG_OBJ := $(PROG_COMMON_OBJ) $(NONTEST_PROGRAM_OBJ) $(TEST_PROGRAM_OBJ)
 
 # Generate autodetected configuration header
 programs/config.h:programs/detect.sh .prog-cflags
-	$(QUIET_GEN) CC="$(CC)" CFLAGS="$(PROG_CFLAGS)" $< > $@
+	$(QUIET_GEN) CC="$(CXX)" CFLAGS="$(PROG_CFLAGS)" $< > $@
 
 # Compile program object files
 $(PROG_OBJ): %.o: %.c $(PROG_COMMON_HEADERS) $(COMMON_HEADERS) .prog-cflags
-	$(QUIET_CC) $(CC) -o $@ -c $(PROG_CFLAGS) $<
+	$(QUIET_CC) $(CXX) -o $@ -c $(PROG_CFLAGS) $<
 
 # Link the programs.
 #
@@ -179,10 +160,10 @@ $(PROG_OBJ): %.o: %.c $(PROG_COMMON_HEADERS) $(COMMON_HEADERS) .prog-cflags
 # test programs must be linked with zlib for doing comparisons.
 
 $(NONTEST_PROGRAMS): %$(PROG_SUFFIX): programs/%.o $(PROG_COMMON_OBJ) $(STATIC_LIB)
-	$(QUIET_CCLD) $(CC) -o $@ $(LDFLAGS) $(PROG_CFLAGS) $+
+	$(QUIET_CCLD) $(CXX) -o $@ $(LDFLAGS) $(PROG_CFLAGS) $+
 
 $(TEST_PROGRAMS): %$(PROG_SUFFIX): programs/%.o $(PROG_COMMON_OBJ) $(STATIC_LIB)
-	$(QUIET_CCLD) $(CC) -o $@ $(LDFLAGS) $(PROG_CFLAGS) $+ -lz
+	$(QUIET_CCLD) $(CXX) -o $@ $(LDFLAGS) $(PROG_CFLAGS) $+ -lz
 
 ifdef HARD_LINKS
 # Hard link gunzip to gzip
@@ -198,7 +179,7 @@ DEFAULT_TARGETS += gunzip$(PROG_SUFFIX)
 
 # Rebuild if CC or PROG_CFLAGS changed
 .prog-cflags: FORCE
-	@flags='$(CC):$(PROG_CFLAGS)'; \
+	@flags='$(CXX):$(PROG_CFLAGS)'; \
 	if [ "$$flags" != "`cat $@ 2>/dev/null`" ]; then \
 		[ -e $@ ] && echo "Rebuilding programs due to new compiler flags"; \
 		echo "$$flags" > $@; \

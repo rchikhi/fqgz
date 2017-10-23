@@ -25,7 +25,9 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+
 #include "prog_util.h"
+
 
 #include <errno.h>
 #include <sys/types.h>
@@ -40,10 +42,8 @@
 
 struct options {
 	bool to_stdout;
-	bool decompress;
 	bool force;
 	bool keep;
-	int compression_level;
 	const tchar *suffix;
 };
 
@@ -53,7 +53,7 @@ static void
 show_usage(FILE *fp)
 {
 	fprintf(fp,
-"Usage: %"TS" [-LEVEL] [-cdfhkV] [-S SUF] FILE...\n"
+"Usage: %" TS " [-LEVEL] [-cdfhkV] [-S SUF] FILE...\n"
 "Compress or decompress the specified FILEs.\n"
 "\n"
 "Options:\n"
@@ -83,23 +83,6 @@ show_version(void)
 	);
 }
 
-/* Was the program invoked in decompression mode? */
-static bool
-is_gunzip(void)
-{
-	if (tstrxcmp(program_invocation_name, T("gunzip")) == 0)
-		return true;
-	if (tstrxcmp(program_invocation_name, T("libdeflate-gunzip")) == 0)
-		return true;
-#ifdef _WIN32
-	if (tstrxcmp(program_invocation_name, T("gunzip.exe")) == 0)
-		return true;
-	if (tstrxcmp(program_invocation_name, T("libdeflate-gunzip.exe")) == 0)
-		return true;
-#endif
-	return false;
-}
-
 static const tchar *
 get_suffix(const tchar *path, const tchar *suffix)
 {
@@ -115,20 +98,13 @@ get_suffix(const tchar *path, const tchar *suffix)
 	return NULL;
 }
 
-static bool
-has_suffix(const tchar *path, const tchar *suffix)
-{
-	return get_suffix(path, suffix) != NULL;
-}
-
 static tchar *
 append_suffix(const tchar *path, const tchar *suffix)
 {
 	size_t path_len = tstrlen(path);
 	size_t suffix_len = tstrlen(suffix);
-	tchar *suffixed_path;
+	tchar *suffixed_path = new tchar[path_len + suffix_len + 1];
 
-	suffixed_path = xmalloc((path_len + suffix_len + 1) * sizeof(tchar));
 	if (suffixed_path == NULL)
 		return NULL;
 	tmemcpy(suffixed_path, path, path_len);
@@ -136,46 +112,8 @@ append_suffix(const tchar *path, const tchar *suffix)
 	return suffixed_path;
 }
 
-static int
-do_compress(struct libdeflate_compressor *compressor,
-	    struct file_stream *in, struct file_stream *out)
-{
-	const void *uncompressed_data = in->mmap_mem;
-	size_t uncompressed_size = in->mmap_size;
-	void *compressed_data;
-	size_t actual_compressed_size;
-	size_t max_compressed_size;
-	int ret;
-
-	max_compressed_size = libdeflate_gzip_compress_bound(compressor,
-							     uncompressed_size);
-	compressed_data = xmalloc(max_compressed_size);
-	if (compressed_data == NULL) {
-		msg("%"TS": file is probably too large to be processed by this "
-		    "program", in->name);
-		ret = -1;
-		goto out;
-	}
-
-	actual_compressed_size = libdeflate_gzip_compress(compressor,
-							  uncompressed_data,
-							  uncompressed_size,
-							  compressed_data,
-							  max_compressed_size);
-	if (actual_compressed_size == 0) {
-		msg("Bug in libdeflate_gzip_compress_bound()!");
-		ret = -1;
-		goto out;
-	}
-
-	ret = full_write(out, compressed_data, actual_compressed_size);
-out:
-	free(compressed_data);
-	return ret;
-}
-
 static u32
-load_u32_gzip(const u8 *p)
+load_u32_gzip(const byte *p)
 {
 	return ((u32)p[0] << 0) | ((u32)p[1] << 8) |
 		((u32)p[2] << 16) | ((u32)p[3] << 24);
@@ -185,24 +123,24 @@ static int
 do_decompress(struct libdeflate_decompressor *decompressor,
 	      struct file_stream *in, struct file_stream *out)
 {
-	const u8 *compressed_data = in->mmap_mem;
+	const byte *compressed_data = static_cast<const byte*>(in->mmap_mem);
 	size_t compressed_size = in->mmap_size;
-	void *uncompressed_data = NULL;
+	byte *uncompressed_data = NULL;
 	size_t uncompressed_size;
 	enum libdeflate_result result;
 	int ret;
 
 	if (compressed_size < sizeof(u32)) {
-	       msg("%"TS": not in gzip format", in->name);
+	       msg("%" TS ": not in gzip format", in->name);
 	       ret = -1;
 	       goto out;
 	}
 
 	uncompressed_size = load_u32_gzip(&compressed_data[compressed_size - 4]);
 
-	uncompressed_data = xmalloc(uncompressed_size);
+	uncompressed_data = new byte[uncompressed_size];
 	if (uncompressed_data == NULL) {
-		msg("%"TS": file is probably too large to be processed by this "
+		msg("%" TS ": file is probably too large to be processed by this "
 		    "program", in->name);
 		ret = -1;
 		goto out;
@@ -215,21 +153,21 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 					    uncompressed_size, NULL);
 
 	if (result == LIBDEFLATE_INSUFFICIENT_SPACE) {
-		msg("%"TS": file corrupt or too large to be processed by this "
+		msg("%" TS ": file corrupt or too large to be processed by this "
 		    "program", in->name);
 		ret = -1;
 		goto out;
 	}
 
 	if (result != LIBDEFLATE_SUCCESS) {
-		msg("%"TS": file corrupt or not in gzip format", in->name);
+		msg("%" TS ": file corrupt or not in gzip format", in->name);
 		ret = -1;
 		goto out;
 	}
 
 	ret = full_write(out, uncompressed_data, uncompressed_size);
 out:
-	free(uncompressed_data);
+	delete uncompressed_data;
 	return ret;
 }
 
@@ -237,19 +175,19 @@ static int
 stat_file(struct file_stream *in, stat_t *stbuf, bool allow_hard_links)
 {
 	if (tfstat(in->fd, stbuf) != 0) {
-		msg("%"TS": unable to stat file", in->name);
+		msg("%" TS ": unable to stat file", in->name);
 		return -1;
 	}
 
 	if (!S_ISREG(stbuf->st_mode) && !in->is_standard_stream) {
-		msg("%"TS" is %s -- skipping",
+		msg("%" TS " is %s -- skipping",
 		    in->name, S_ISDIR(stbuf->st_mode) ? "a directory" :
 							"not a regular file");
 		return -2;
 	}
 
 	if (stbuf->st_nlink > 1 && !allow_hard_links) {
-		msg("%"TS" has multiple hard links -- skipping "
+		msg("%" TS " has multiple hard links -- skipping "
 		    "(use -f to process anyway)", in->name);
 		return -2;
 	}
@@ -262,7 +200,7 @@ restore_mode(struct file_stream *out, const stat_t *stbuf)
 {
 #ifndef _WIN32
 	if (fchmod(out->fd, stbuf->st_mode) != 0)
-		msg_errno("%"TS": unable to preserve mode", out->name);
+		msg_errno("%" TS ": unable to preserve mode", out->name);
 #endif
 }
 
@@ -271,7 +209,7 @@ restore_owner_and_group(struct file_stream *out, const stat_t *stbuf)
 {
 #ifndef _WIN32
 	if (fchown(out->fd, stbuf->st_uid, stbuf->st_gid) != 0) {
-		msg_errno("%"TS": unable to preserve owner and group",
+		msg_errno("%" TS ": unable to preserve owner and group",
 			  out->name);
 	}
 #endif
@@ -300,7 +238,7 @@ restore_timestamps(struct file_stream *out, const tchar *newpath,
 	ret = tutime(newpath, &times);
 #endif
 	if (ret != 0)
-		msg_errno("%"TS": unable to preserve timestamps", out->name);
+		msg_errno("%" TS ": unable to preserve timestamps", out->name);
 }
 
 static void
@@ -341,7 +279,7 @@ decompress_file(struct libdeflate_decompressor *decompressor, const tchar *path,
 				if (!options->to_stdout)
 					newpath = (tchar *)path;
 			} else if (!options->to_stdout) {
-				msg("\"%"TS"\" does not end with the %"TS" "
+				msg("\"%" TS "\" does not end with the %" TS " "
 				    "suffix -- skipping",
 				    path, options->suffix);
 				return -2;
@@ -352,8 +290,7 @@ decompress_file(struct libdeflate_decompressor *decompressor, const tchar *path,
 			 * stdout.  Strip the suffix to get the path to the
 			 * output file.
 			 */
-			newpath = xmalloc((suffix - oldpath + 1) *
-					  sizeof(tchar));
+			newpath = new tchar[suffix - oldpath + 1];
 			if (newpath == NULL)
 				return -1;
 			tmemcpy(newpath, oldpath, suffix - oldpath);
@@ -406,78 +343,9 @@ out_close_in:
 		tunlink(oldpath);
 out_free_paths:
 	if (newpath != path)
-		free(newpath);
+		delete newpath;
 	if (oldpath != path)
-		free(oldpath);
-	return ret;
-}
-
-static int
-compress_file(struct libdeflate_compressor *compressor, const tchar *path,
-	      const struct options *options)
-{
-	tchar *newpath = NULL;
-	struct file_stream in;
-	struct file_stream out;
-	stat_t stbuf;
-	int ret;
-	int ret2;
-
-	if (path != NULL && !options->to_stdout) {
-		if (!options->force && has_suffix(path, options->suffix)) {
-			msg("%"TS": already has %"TS" suffix -- skipping",
-			    path, options->suffix);
-			return 0;
-		}
-		newpath = append_suffix(path, options->suffix);
-		if (newpath == NULL)
-			return -1;
-	}
-
-	ret = xopen_for_read(path, options->force || options->to_stdout, &in);
-	if (ret != 0)
-		goto out_free_newpath;
-
-	ret = stat_file(&in, &stbuf, options->force || options->keep ||
-			path == NULL || newpath == NULL);
-	if (ret != 0)
-		goto out_close_in;
-
-	ret = xopen_for_write(newpath, options->force, &out);
-	if (ret != 0)
-		goto out_close_in;
-
-	if (!options->force && isatty(out.fd)) {
-		msg("Refusing to write compressed data to terminal. "
-		    "Use -f to override.\nFor help, use -h.");
-		ret = -1;
-		goto out_close_out;
-	}
-
-	/* TODO: need a streaming-friendly solution */
-	ret = map_file_contents(&in, stbuf.st_size);
-	if (ret != 0)
-		goto out_close_out;
-
-	ret = do_compress(compressor, &in, &out);
-	if (ret != 0)
-		goto out_close_out;
-
-	if (path != NULL && newpath != NULL)
-		restore_metadata(&out, newpath, &stbuf);
-	ret = 0;
-out_close_out:
-	ret2 = xclose(&out);
-	if (ret == 0)
-		ret = ret2;
-	if (ret != 0 && newpath != NULL)
-		tunlink(newpath);
-out_close_in:
-	xclose(&in);
-	if (ret == 0 && path != NULL && newpath != NULL && !options->keep)
-		tunlink(path);
-out_free_newpath:
-	free(newpath);
+		delete oldpath;
 	return ret;
 }
 
@@ -490,36 +358,17 @@ tmain(int argc, tchar *argv[])
 	int i;
 	int ret;
 
-	program_invocation_name = get_filename(argv[0]);
+	_program_invocation_name = get_filename(argv[0]);
 
 	options.to_stdout = false;
-	options.decompress = is_gunzip();
 	options.force = false;
 	options.keep = false;
-	options.compression_level = 6;
 	options.suffix = T(".gz");
 
 	while ((opt_char = tgetopt(argc, argv, optstring)) != -1) {
 		switch (opt_char) {
-		case '1':
-		case '2':
-		case '3':
-		case '4':
-		case '5':
-		case '6':
-		case '7':
-		case '8':
-		case '9':
-			options.compression_level =
-				parse_compression_level(opt_char, toptarg);
-			if (options.compression_level == 0)
-				return 1;
-			break;
 		case 'c':
 			options.to_stdout = true;
-			break;
-		case 'd':
-			options.decompress = true;
 			break;
 		case 'f':
 			options.force = true;
@@ -567,29 +416,16 @@ tmain(int argc, tchar *argv[])
 	}
 
 	ret = 0;
-	if (options.decompress) {
-		struct libdeflate_decompressor *d;
+    struct libdeflate_decompressor *d;
 
-		d = alloc_decompressor();
-		if (d == NULL)
-			return 1;
+    d = alloc_decompressor();
+    if (d == NULL)
+        return 1;
 
-		for (i = 0; i < argc; i++)
-			ret |= -decompress_file(d, argv[i], &options);
+    for (i = 0; i < argc; i++)
+        ret |= -decompress_file(d, argv[i], &options);
 
-		libdeflate_free_decompressor(d);
-	} else {
-		struct libdeflate_compressor *c;
-
-		c = alloc_compressor(options.compression_level);
-		if (c == NULL)
-			return 1;
-
-		for (i = 0; i < argc; i++)
-			ret |= -compress_file(c, argv[i], &options);
-
-		libdeflate_free_compressor(c);
-	}
+    libdeflate_free_decompressor(d);
 
 	/*
 	 * If ret=0, there were no warnings or errors.  Exit with status 0.

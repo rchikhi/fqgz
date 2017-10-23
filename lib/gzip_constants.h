@@ -9,17 +9,17 @@
 #define GZIP_FOOTER_SIZE	8
 #define GZIP_MIN_OVERHEAD	(GZIP_MIN_HEADER_SIZE + GZIP_FOOTER_SIZE)
 
-#define GZIP_ID1		0x1F
-#define GZIP_ID2		0x8B
+#define GZIP_ID1		byte(0x1F)
+#define GZIP_ID2		byte(0x8B)
 
-#define GZIP_CM_DEFLATE		8
+#define GZIP_CM_DEFLATE		byte(8)
 
-#define GZIP_FTEXT		0x01
-#define GZIP_FHCRC		0x02
-#define GZIP_FEXTRA		0x04
-#define GZIP_FNAME		0x08
-#define GZIP_FCOMMENT		0x10
-#define GZIP_FRESERVED		0xE0
+#define GZIP_FTEXT		byte(0x01)
+#define GZIP_FHCRC		byte(0x02)
+#define GZIP_FEXTRA		byte(0x04)
+#define GZIP_FNAME		byte(0x08)
+#define GZIP_FCOMMENT	byte(0x10)
+#define GZIP_FRESERVED	byte(0xE0)
 
 #define GZIP_MTIME_UNAVAILABLE	0
 

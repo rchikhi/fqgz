@@ -58,6 +58,8 @@ typedef int8_t s8;
 typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
+#include <cstddef>
+using byte = std::byte;
 
 /*
  * Word type of the target architecture.  Use 'size_t' instead of 'unsigned
@@ -166,17 +168,7 @@ typedef size_t machine_word_t;
  * that the compiler can evaluate it at compilation time.  If not defined, a
  * fallback is used.
  */
-#ifndef CPU_IS_LITTLE_ENDIAN
-static forceinline int CPU_IS_LITTLE_ENDIAN(void)
-{
-	union {
-		unsigned int v;
-		unsigned char b;
-	} u;
-	u.v = 1;
-	return u.b;
-}
-#endif
+#define CPU_IS_LITTLE_ENDIAN() (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
 
 /* bswap16(n) - swap the bytes of a 16-bit integer */
 #ifndef bswap16
@@ -212,12 +204,12 @@ static forceinline u64 bswap64(u64 n)
 }
 #endif
 
-#define le16_bswap(n) (CPU_IS_LITTLE_ENDIAN() ? (n) : bswap16(n))
-#define le32_bswap(n) (CPU_IS_LITTLE_ENDIAN() ? (n) : bswap32(n))
-#define le64_bswap(n) (CPU_IS_LITTLE_ENDIAN() ? (n) : bswap64(n))
-#define be16_bswap(n) (CPU_IS_LITTLE_ENDIAN() ? bswap16(n) : (n))
-#define be32_bswap(n) (CPU_IS_LITTLE_ENDIAN() ? bswap32(n) : (n))
-#define be64_bswap(n) (CPU_IS_LITTLE_ENDIAN() ? bswap64(n) : (n))
+#define le16_bswap(n) (n)
+#define le32_bswap(n) (n)
+#define le64_bswap(n) (n)
+#define be16_bswap(n) bswap16(n)
+#define be32_bswap(n) bswap32(n)
+#define be64_bswap(n) bswap64(n)
 
 /* ========================================================================== */
 /*                          Unaligned memory accesses                         */
@@ -274,37 +266,6 @@ store_##type##_unaligned(type v, void *p)			\
  * input value must be nonzero!
  */
 
-#ifndef bsr32
-static forceinline unsigned
-bsr32(u32 n)
-{
-	unsigned i = 0;
-	while ((n >>= 1) != 0)
-		i++;
-	return i;
-}
-#endif
-
-#ifndef bsr64
-static forceinline unsigned
-bsr64(u64 n)
-{
-	unsigned i = 0;
-	while ((n >>= 1) != 0)
-		i++;
-	return i;
-}
-#endif
-
-static forceinline unsigned
-bsrw(machine_word_t n)
-{
-	STATIC_ASSERT(WORDBITS == 32 || WORDBITS == 64);
-	if (WORDBITS == 32)
-		return bsr32(n);
-	else
-		return bsr64(n);
-}
 
 /*
  * Bit Scan Forward (BSF) - find the 0-based index (relative to the least
@@ -312,40 +273,6 @@ bsrw(machine_word_t n)
  * input value must be nonzero!
  */
 
-#ifndef bsf32
-static forceinline unsigned
-bsf32(u32 n)
-{
-	unsigned i = 0;
-	while ((n & 1) == 0) {
-		i++;
-		n >>= 1;
-	}
-	return i;
-}
-#endif
 
-#ifndef bsf64
-static forceinline unsigned
-bsf64(u64 n)
-{
-	unsigned i = 0;
-	while ((n & 1) == 0) {
-		i++;
-		n >>= 1;
-	}
-	return i;
-}
-#endif
-
-static forceinline unsigned
-bsfw(machine_word_t n)
-{
-	STATIC_ASSERT(WORDBITS == 32 || WORDBITS == 64);
-	if (WORDBITS == 32)
-		return bsf32(n);
-	else
-		return bsf64(n);
-}
 
 #endif /* COMMON_COMMON_DEFS_H */

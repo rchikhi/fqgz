@@ -202,31 +202,6 @@ typedef machine_word_t bitbuf_t;
 #define CAN_ENSURE(n)	((n) <= MAX_ENSURE)
 
 /*
- * Fill the bitbuffer variable, reading one byte at a time.
- *
- * Note: if we would overrun the input buffer, we just don't read anything,
- * leaving the bits as 0 but marking them as filled.  This makes the
- * implementation simpler because this removes the need to distinguish between
- * "real" overruns and overruns that occur because of our own lookahead during
- * Huffman decoding.  The disadvantage is that a "real" overrun can go
- * undetected, and libdeflate_deflate_decompress() may return a success status
- * rather than the expected failure status if one occurs.  However, this is
- * irrelevant because even if this specific case were to be handled "correctly",
- * one could easily come up with a different case where the compressed data
- * would be corrupted in such a way that fully retains its validity.  Users
- * should run a checksum against the uncompressed data if they wish to detect
- * corruptions.
- */
-#define FILL_BITS_BYTEWISE()					\
-do {								\
-	if (likely(in_next != in_end))				\
-		bitbuf |= (bitbuf_t)*in_next++ << bitsleft;	\
-	else							\
-		overrun_count++;				\
-	bitsleft += 8;						\
-} while (bitsleft <= BITBUF_NBITS - 8)
-
-/*
  * Fill the bitbuffer variable by reading the next word from the input buffer.
  * This can be significantly faster than FILL_BITS_BYTEWISE().  However, for
  * this to work correctly, the word must be interpreted in little-endian format.
@@ -247,18 +222,40 @@ do {								\
 #define HAVE_BITS(n) (bitsleft >= (n))
 
 /*
+ * Fill the bitbuffer variable, reading one byte at a time.
+ *
+ * Note: if we would overrun the input buffer, we just don't read anything,
+ * leaving the bits as 0 but marking them as filled.  This makes the
+ * implementation simpler because this removes the need to distinguish between
+ * "real" overruns and overruns that occur because of our own lookahead during
+ * Huffman decoding.  The disadvantage is that a "real" overrun can go
+ * undetected, and libdeflate_deflate_decompress() may return a success status
+ * rather than the expected failure status if one occurs.  However, this is
+ * irrelevant because even if this specific case were to be handled "correctly",
+ * one could easily come up with a different case where the compressed data
+ * would be corrupted in such a way that fully retains its validity.  Users
+ * should run a checksum against the uncompressed data if they wish to detect
+ * corruptions.
+ */
+#define FILL_BITS_BYTEWISE()                                   \
+do {                                                           \
+       if (likely(in_next != in_end))                          \
+               bitbuf |= (bitbuf_t)*in_next++ << bitsleft;     \
+       else                                                    \
+               overrun_count++;                                \
+       bitsleft += 8;                                          \
+} while (bitsleft <= BITBUF_NBITS - 8)
+
+/*
  * Load more bits from the input buffer until the specified number of bits is
  * present in the bitbuffer variable.  'n' cannot be too large; see MAX_ENSURE
  * and CAN_ENSURE().
  */
 #define ENSURE_BITS(n)						\
 if (!HAVE_BITS(n)) {						\
-	if (CPU_IS_LITTLE_ENDIAN() &&				\
-	    UNALIGNED_ACCESS_IS_FAST &&				\
-	    likely(in_end - in_next >= sizeof(bitbuf_t)))	\
+	if (likely(in_end - in_next >= static_cast<std::ptrdiff_t>(sizeof(bitbuf_t))))	\
 		FILL_BITS_WORDWISE();				\
-	else							\
-		FILL_BITS_BYTEWISE();				\
+        else FILL_BITS_BYTEWISE();                              \
 }
 
 /*
@@ -598,7 +595,7 @@ build_decode_table(u32 decode_table[],
 			decode_table[sym] = entry;
 
 		/* A completely empty code is permitted.  */
-		if (remainder == (1U << max_codeword_len))
+		if (remainder == s32(1U << max_codeword_len))
 			return true;
 
 		/* The code is nonempty and incomplete.  Proceed only if there
@@ -608,7 +605,7 @@ build_decode_table(u32 decode_table[],
 		 * literal/length and offset codes and assume the codeword is 0
 		 * rather than 1.  We do the same except we allow this case for
 		 * precodes too.  */
-		if (remainder != (1U << (max_codeword_len - 1)) ||
+		if (remainder != s32(1U << (max_codeword_len - 1)) ||
 		    len_counts[1] != 1)
 			return false;
 	}
@@ -777,13 +774,12 @@ build_offset_decode_table(struct libdeflate_decompressor *d,
 }
 
 static forceinline machine_word_t
-repeat_byte(u8 b)
+repeat_byte(byte b)
 {
-	machine_word_t v;
+	machine_word_t v = static_cast<machine_word_t>(b);
 
 	STATIC_ASSERT(WORDBITS == 32 || WORDBITS == 64);
 
-	v = b;
 	v |= v << 8;
 	v |= v << 16;
 	v |= v << ((WORDBITS == 64) ? 32 : 0);
@@ -800,90 +796,24 @@ copy_word_unaligned(const void *src, void *dst)
  *                         Main decompression routine
  *****************************************************************************/
 
-#define FUNCNAME deflate_decompress_default
-#define ATTRIBUTES
+
+
+
 #include "decompress_impl.h"
-#undef FUNCNAME
-#undef ATTRIBUTES
-
-#if X86_CPU_FEATURES_ENABLED && \
-	COMPILER_SUPPORTS_BMI2_TARGET && !defined(__BMI2__)
-#  define FUNCNAME deflate_decompress_bmi2
-#  define ATTRIBUTES __attribute__((target("bmi2")))
-#  include "decompress_impl.h"
-#  undef FUNCNAME
-#  undef ATTRIBUTES
-#  define DISPATCH_ENABLED 1
-#else
-#  define DISPATCH_ENABLED 0
-#endif
-
-#if DISPATCH_ENABLED
-
-static enum libdeflate_result
-dispatch(struct libdeflate_decompressor * restrict d,
-	 const void * restrict in, size_t in_nbytes,
-	 void * restrict out, size_t out_nbytes_avail,
-	 size_t *actual_out_nbytes_ret);
-
-typedef enum libdeflate_result (*decompress_func_t)
-	(struct libdeflate_decompressor * restrict d,
-	 const void * restrict in, size_t in_nbytes,
-	 void * restrict out, size_t out_nbytes_avail,
-	 size_t *actual_out_nbytes_ret);
-
-static decompress_func_t decompress_impl = dispatch;
-
-static enum libdeflate_result
-dispatch(struct libdeflate_decompressor * restrict d,
-	 const void * restrict in, size_t in_nbytes,
-	 void * restrict out, size_t out_nbytes_avail,
-	 size_t *actual_out_nbytes_ret)
-{
-	decompress_func_t f = deflate_decompress_default;
-#if X86_CPU_FEATURES_ENABLED
-	if (x86_have_cpu_features(X86_CPU_FEATURE_BMI2))
-		f = deflate_decompress_bmi2;
-#endif
-	decompress_impl = f;
-	return (*f)(d, in, in_nbytes, out, out_nbytes_avail,
-		    actual_out_nbytes_ret);
-}
-#endif /* DISPATCH_ENABLED */
 
 
-/*
- * This is the main DEFLATE decompression routine.  See libdeflate.h for the
- * documentation.
- *
- * Note that the real code is in decompress_impl.h.  The part here just handles
- * calling the appropriate implementation depending on the CPU features at
- * runtime.
- */
-LIBDEFLATEAPI enum libdeflate_result
-libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
-			      const void * restrict in, size_t in_nbytes,
-			      void * restrict out, size_t out_nbytes_avail,
-			      size_t *actual_out_nbytes_ret)
-{
-#if DISPATCH_ENABLED
-	return (*decompress_impl)(d, in, in_nbytes, out, out_nbytes_avail,
-				  actual_out_nbytes_ret);
-#else
-	return deflate_decompress_default(d, in, in_nbytes, out,
-					  out_nbytes_avail,
-					  actual_out_nbytes_ret);
-#endif
-}
+
+
+
 
 LIBDEFLATEAPI struct libdeflate_decompressor *
 libdeflate_alloc_decompressor(void)
 {
-	return malloc(sizeof(struct libdeflate_decompressor));
+	return new libdeflate_decompressor();
 }
 
 LIBDEFLATEAPI void
 libdeflate_free_decompressor(struct libdeflate_decompressor *d)
 {
-	free(d);
+	delete d;
 }

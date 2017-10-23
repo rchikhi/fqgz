@@ -114,12 +114,11 @@ extern int wmain(int argc, wchar_t **argv);
 
 #endif /* !_WIN32 */
 
-extern const tchar *program_invocation_name;
+
+extern const tchar *_program_invocation_name;
 
 extern void _printf(1, 2) msg(const char *fmt, ...);
 extern void _printf(1, 2) msg_errno(const char *fmt, ...);
-
-extern void *xmalloc(size_t size);
 
 extern u64 timer_ticks(void);
 extern u64 timer_ticks_to_ms(u64 ticks);
@@ -129,7 +128,7 @@ extern const tchar *get_filename(const tchar *path);
 
 struct file_stream {
 	int fd;
-	tchar *name;
+	const tchar *name;
 	bool is_standard_stream;
 	void *mmap_token;
 	void *mmap_mem;

@@ -70,10 +70,10 @@ tgetopt(int argc, tchar *argv[], const tchar *optstring)
 		} else {
 			/* More short options in previous arg */
 			tchar opt = *nextchar;
-			tchar *p = tstrchr(optstring, opt);
+			const tchar *p = tstrchr(optstring, opt);
 			if (p == NULL) {
 				if (topterr)
-					msg("invalid option -- '%"TC"'", opt);
+					msg("invalid option -- '%" TC "'", opt);
 				toptopt = opt;
 				return '?';
 			}
@@ -93,7 +93,7 @@ tgetopt(int argc, tchar *argv[], const tchar *optstring)
 				} else if (*(p + 2) != ':') {
 					if (topterr && *optstring != ':') {
 						msg("option requires an "
-						    "argument -- '%"TC"'", opt);
+						    "argument -- '%" TC "'", opt);
 					}
 					toptopt = opt;
 					opt = (*optstring == ':') ? ':' : '?';

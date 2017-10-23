@@ -5,16 +5,15 @@
 #ifndef LIBDEFLATE_H
 #define LIBDEFLATE_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+
 
 #define LIBDEFLATE_VERSION_MAJOR	0
 #define LIBDEFLATE_VERSION_MINOR	8
 #define LIBDEFLATE_VERSION_STRING	"0.8"
 
-#include <stddef.h>
-#include <stdint.h>
+#include <cstddef>
+#include <cstdint>
+using byte = std::byte;
 
 /*
  * On Windows, if you want to link to the DLL version of libdeflate, then
@@ -212,8 +211,8 @@ enum libdeflate_result {
  */
 LIBDEFLATEAPI enum libdeflate_result
 libdeflate_deflate_decompress(struct libdeflate_decompressor *decompressor,
-			      const void *in, size_t in_nbytes,
-			      void *out, size_t out_nbytes_avail,
+			      const byte *in, size_t in_nbytes,
+			      byte *out, size_t out_nbytes_avail,
 			      size_t *actual_out_nbytes_ret);
 
 /*
@@ -232,8 +231,8 @@ libdeflate_zlib_decompress(struct libdeflate_decompressor *decompressor,
  */
 LIBDEFLATEAPI enum libdeflate_result
 libdeflate_gzip_decompress(struct libdeflate_decompressor *decompressor,
-			   const void *in, size_t in_nbytes,
-			   void *out, size_t out_nbytes_avail,
+			   const byte *in, size_t in_nbytes,
+			   byte *out, size_t out_nbytes_avail,
 			   size_t *actual_out_nbytes_ret);
 
 /*
@@ -267,8 +266,6 @@ libdeflate_adler32(uint32_t adler32, const void *buffer, size_t len);
 LIBDEFLATEAPI uint32_t
 libdeflate_crc32(uint32_t crc, const void *buffer, size_t len);
 
-#ifdef __cplusplus
-}
-#endif
+
 
 #endif /* LIBDEFLATE_H */

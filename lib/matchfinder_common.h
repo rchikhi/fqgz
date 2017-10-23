@@ -195,10 +195,7 @@ lz_extend(const u8 * const strptr, const u8 * const matchptr,
 	return len;
 
 word_differs:
-	if (CPU_IS_LITTLE_ENDIAN())
-		len += (bsfw(v_word) >> 3);
-	else
-		len += (WORDBITS - 1 - bsrw(v_word)) >> 3;
+    len += (bsf64(v_word) >> 3);
 	return len;
 }
 

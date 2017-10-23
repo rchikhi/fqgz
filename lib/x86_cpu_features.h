@@ -38,7 +38,7 @@ x86_setup_cpu_features(void);
 static inline bool
 x86_have_cpu_features(u32 features)
 {
-	if (_x86_cpu_features == 0)
+	if (_x86_cpu_features == 0u)
 		x86_setup_cpu_features();
 	return (_x86_cpu_features & features) == features;
 }

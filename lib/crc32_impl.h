@@ -102,13 +102,13 @@ static u32 ATTRIBUTES
 FUNCNAME_ALIGNED(u32 remainder, const __m128i *p, size_t vec_count)
 {
 	/* Constants precomputed by gen_crc32_multipliers.c.  Do not edit! */
-	const __v2di multipliers_4 = (__v2di){ 0x8F352D95, 0x1D9513D7 };
-	const __v2di multipliers_2 = (__v2di){ 0xF1DA05AA, 0x81256527 };
-	const __v2di multipliers_1 = (__v2di){ 0xAE689191, 0xCCAA009E };
-	const __v2di final_multiplier = (__v2di){ 0xB8BC6765 };
-	const __m128i mask32 = (__m128i)(__v4si){ 0xFFFFFFFF };
+	const __v2di multipliers_4 = __v2di{ 0x8F352D95, 0x1D9513D7 };
+	const __v2di multipliers_2 = __v2di{ 0xF1DA05AA, 0x81256527 };
+	const __v2di multipliers_1 = __v2di{ 0xAE689191, 0xCCAA009E };
+	const __v2di final_multiplier = __v2di{ 0xB8BC6765 };
+	const __m128i mask32 = (__m128i) __v4si{ 0xFFFFFFFF };
 	const __v2di barrett_reduction_constants =
-			(__v2di){ 0x00000001F7011641, 0x00000001DB710641 };
+			__v2di{ 0x00000001F7011641, 0x00000001DB710641 };
 
 	const __m128i * const end = p + vec_count;
 	const __m128i * const end512 = p + (vec_count & ~3);
@@ -136,7 +136,7 @@ FUNCNAME_ALIGNED(u32 remainder, const __m128i *p, size_t vec_count)
 	 * have been XOR'ed with the CRC of the first part of the message.
 	 */
 	x0 = *p++;
-	x0 ^= (__m128i)(__v4si){ remainder };
+	x0 ^= (__m128i) __v4si{ remainder };
 
 	if (p > end512) /* only 128, 256, or 384 bits of input? */
 		goto _128_bits_at_a_time;

@@ -56,14 +56,14 @@
 #endif
 
 /* The invocation name of the program (filename component only) */
-const tchar *program_invocation_name;
+const tchar *_program_invocation_name;
 
 static void
 do_msg(const char *format, bool with_errno, va_list va)
 {
 	int saved_errno = errno;
 
-	fprintf(stderr, "%"TS": ", program_invocation_name);
+	fprintf(stderr, "%" TS ": ", program_invocation_name);
 	vfprintf(stderr, format, va);
 	if (with_errno)
 		fprintf(stderr, ": %s\n", strerror(saved_errno));
@@ -95,17 +95,7 @@ msg_errno(const char *format, ...)
 	va_end(va);
 }
 
-/* malloc() wrapper */
-void *
-xmalloc(size_t size)
-{
-	void *p = malloc(size);
-	if (p == NULL && size == 0)
-		p = malloc(1);
-	if (p == NULL)
-		msg("Out of memory");
-	return p;
-}
+
 
 /*
  * Return the number of timer ticks that have elapsed since some unspecified
@@ -188,9 +178,8 @@ static tchar *
 quote_path(const tchar *path)
 {
 	size_t len = tstrlen(path);
-	tchar *result;
+	tchar *result = new tchar[1 + len + 1 + 1];
 
-	result = xmalloc((1 + len + 1 + 1) * sizeof(tchar));
 	if (result == NULL)
 		return NULL;
 	result[0] = '"';
@@ -226,8 +215,8 @@ xopen_for_read(const tchar *path, bool symlink_ok, struct file_stream *strm)
 	strm->fd = topen(path, O_RDONLY | O_BINARY | O_NONBLOCK | O_NOCTTY |
 			 (symlink_ok ? 0 : O_NOFOLLOW) | O_SEQUENTIAL);
 	if (strm->fd < 0) {
-		msg_errno("Can't open %"TS" for reading", strm->name);
-		free(strm->name);
+		msg_errno("Can't open %" TS " for reading", strm->name);
+		delete strm->name;
 		return -1;
 	}
 
@@ -267,17 +256,17 @@ retry:
 				O_CREAT | O_EXCL, 0644);
 	if (strm->fd < 0) {
 		if (errno != EEXIST) {
-			msg_errno("Can't open %"TS" for writing", strm->name);
+			msg_errno("Can't open %" TS " for writing", strm->name);
 			goto err;
 		}
 		if (!overwrite) {
 			if (!isatty(STDERR_FILENO) || !isatty(STDIN_FILENO)) {
-				msg("%"TS" already exists; use -f to overwrite",
+				msg("%" TS " already exists; use -f to overwrite",
 				    strm->name);
 				ret = -2; /* warning only */
 				goto err;
 			}
-			fprintf(stderr, "%"TS": %"TS" already exists; "
+			fprintf(stderr, "%" TS ": %" TS " already exists; "
 				"overwrite? (y/n) ",
 				program_invocation_name, strm->name);
 			if (getchar() != 'y') {
@@ -286,7 +275,7 @@ retry:
 			}
 		}
 		if (tunlink(path) != 0) {
-			msg_errno("Unable to delete %"TS, strm->name);
+			msg_errno("Unable to delete %" TS, strm->name);
 			goto err;
 		}
 		goto retry;
@@ -295,33 +284,26 @@ retry:
 	return 0;
 
 err:
-	free(strm->name);
+	delete strm->name;
 	return ret;
 }
-
+#include <vector>
 /* Read the full contents of a file into memory */
 static int
 read_full_contents(struct file_stream *strm)
 {
 	size_t filled = 0;
 	size_t capacity = 4096;
-	char *buf;
+	std::vector<char> buf;
 	int ret;
 
-	buf = xmalloc(capacity);
-	if (buf == NULL)
-		return -1;
+    buf.resize(capacity);
 	do {
 		if (filled == capacity) {
-			char *newbuf;
-
 			if (capacity == SIZE_MAX)
 				goto oom;
 			capacity += MIN(SIZE_MAX - capacity, capacity);
-			newbuf = realloc(buf, capacity);
-			if (newbuf == NULL)
-				goto oom;
-			buf = newbuf;
+            buf.resize(capacity);
 		}
 		ret = xread(strm, &buf[filled], capacity - filled);
 		if (ret < 0)
@@ -329,15 +311,14 @@ read_full_contents(struct file_stream *strm)
 		filled += ret;
 	} while (ret != 0);
 
-	strm->mmap_mem = buf;
+	strm->mmap_mem = &buf[0];
 	strm->mmap_size = filled;
 	return 0;
 
 err:
-	free(buf);
 	return ret;
 oom:
-	msg("Out of memory!  %"TS" is too large to be processed by "
+	msg("Out of memory!  %" TS " is too large to be processed by "
 	    "this program as currently implemented.", strm->name);
 	ret = -1;
 	goto err;
@@ -351,7 +332,7 @@ map_file_contents(struct file_stream *strm, u64 size)
 		return read_full_contents(strm);
 
 	if (size > SIZE_MAX) {
-		msg("%"TS" is too large to be processed by this program",
+		msg("%" TS " is too large to be processed by this program",
 		    strm->name);
 		return -1;
 	}
@@ -363,7 +344,7 @@ map_file_contents(struct file_stream *strm, u64 size)
 		DWORD err = GetLastError();
 		if (err == ERROR_BAD_EXE_FORMAT) /* mmap unsupported */
 			return read_full_contents(strm);
-		msg("Unable create file mapping for %"TS": Windows error %u",
+		msg("Unable create file mapping for %" TS ": Windows error %u",
 		    strm->name, (unsigned int)err);
 		return -1;
 	}
@@ -371,7 +352,7 @@ map_file_contents(struct file_stream *strm, u64 size)
 	strm->mmap_mem = MapViewOfFile((HANDLE)strm->mmap_token,
 				       FILE_MAP_READ, 0, 0, size);
 	if (strm->mmap_mem == NULL) {
-		msg("Unable to map %"TS" into memory: Windows error %u",
+		msg("Unable to map %" TS " into memory: Windows error %u",
 		    strm->name, (unsigned int)GetLastError());
 		CloseHandle((HANDLE)strm->mmap_token);
 		return -1;
@@ -383,10 +364,10 @@ map_file_contents(struct file_stream *strm, u64 size)
 		if (errno == ENODEV) /* mmap isn't supported on this file */
 			return read_full_contents(strm);
 		if (errno == ENOMEM) {
-			msg("%"TS" is too large to be processed by this "
+			msg("%" TS " is too large to be processed by this "
 			    "program", strm->name);
 		} else {
-			msg_errno("Unable to map %"TS" into memory",
+			msg_errno("Unable to map %" TS " into memory",
 				  strm->name);
 		}
 		return -1;
@@ -409,7 +390,7 @@ map_file_contents(struct file_stream *strm, u64 size)
 ssize_t
 xread(struct file_stream *strm, void *buf, size_t count)
 {
-	char *p = buf;
+	char *p = static_cast<char*>(buf);
 	size_t orig_count = count;
 
 	while (count != 0) {
@@ -419,7 +400,7 @@ xread(struct file_stream *strm, void *buf, size_t count)
 		if (res < 0) {
 			if (errno == EAGAIN || errno == EINTR)
 				continue;
-			msg_errno("Error reading from %"TS, strm->name);
+			msg_errno("Error reading from %" TS, strm->name);
 			return -1;
 		}
 		p += res;
@@ -432,12 +413,12 @@ xread(struct file_stream *strm, void *buf, size_t count)
 int
 full_write(struct file_stream *strm, const void *buf, size_t count)
 {
-	const char *p = buf;
+	const char *p = static_cast<const char*>(buf);
 
 	while (count != 0) {
 		ssize_t res = write(strm->fd, p, MIN(count, INT_MAX));
 		if (res <= 0) {
-			msg_errno("Error writing to %"TS, strm->name);
+			msg_errno("Error writing to %" TS, strm->name);
 			return -1;
 		}
 		p += res;
@@ -454,10 +435,10 @@ xclose(struct file_stream *strm)
 
 	if (!strm->is_standard_stream) {
 		if (close(strm->fd) != 0) {
-			msg_errno("Error closing %"TS, strm->name);
+			msg_errno("Error closing %" TS, strm->name);
 			ret = -1;
 		}
-		free(strm->name);
+		delete strm->name;
 	}
 
 	if (strm->mmap_token != NULL) {
@@ -477,44 +458,8 @@ xclose(struct file_stream *strm)
 	return ret;
 }
 
-/*
- * Parse the compression level given on the command line, returning the
- * compression level on success or 0 on error
- */
-int
-parse_compression_level(tchar opt_char, const tchar *arg)
-{
-	unsigned long level = opt_char - '0';
-	const tchar *p;
 
-	if (arg == NULL)
-		arg = T("");
 
-	for (p = arg; *p >= '0' && *p <= '9'; p++)
-		level = (level * 10) + (*p - '0');
-
-	if (level < 1 || level > 12 || *p != '\0') {
-		msg("Invalid compression level: \"%"TC"%"TS"\".  "
-		    "Must be an integer in the range [1, 12].", opt_char, arg);
-		return 0;
-	}
-
-	return level;
-}
-
-/* Allocate a new DEFLATE compressor */
-struct libdeflate_compressor *
-alloc_compressor(int level)
-{
-	struct libdeflate_compressor *c;
-
-	c = libdeflate_alloc_compressor(level);
-	if (c == NULL) {
-		msg_errno("Unable to allocate compressor with "
-			  "compression level %d", level);
-	}
-	return c;
-}
 
 /* Allocate a new DEFLATE decompressor */
 struct libdeflate_decompressor *

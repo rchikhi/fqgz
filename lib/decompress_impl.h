@@ -28,21 +28,23 @@
  */
 
 /*
- * This is the actual DEFLATE decompression routine, lifted out of
- * deflate_decompress.c so that it can be compiled multiple times with different
- * target instruction sets.
+ * This is the main DEFLATE decompression routine.  See libdeflate.h for the
+ * documentation.
+ *
+ * Note that the real code is in decompress_impl.h.  The part here just handles
+ * calling the appropriate implementation depending on the CPU features at
+ * runtime.
  */
-
-static enum libdeflate_result ATTRIBUTES
-FUNCNAME(struct libdeflate_decompressor * restrict d,
-	 const void * restrict in, size_t in_nbytes,
-	 void * restrict out, size_t out_nbytes_avail,
-	 size_t *actual_out_nbytes_ret)
+LIBDEFLATEAPI enum libdeflate_result
+libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
+			      const byte * restrict in, size_t in_nbytes,
+			      byte * restrict out, size_t out_nbytes_avail,
+			      size_t *actual_out_nbytes_ret)
 {
-	u8 *out_next = out;
-	u8 * const out_end = out_next + out_nbytes_avail;
-	const u8 *in_next = in;
-	const u8 * const in_end = in_next + in_nbytes;
+	byte *out_next = out;
+	byte * const out_end = out_next + out_nbytes_avail;
+	const byte *in_next = in;
+	const byte * const in_end = in_next + in_nbytes;
 	bitbuf_t bitbuf = 0;
 	unsigned bitsleft = 0;
 	size_t overrun_count = 0;
@@ -269,7 +271,7 @@ next_block:
 			/* Literal  */
 			if (unlikely(out_next == out_end))
 				return LIBDEFLATE_INSUFFICIENT_SPACE;
-			*out_next++ = (u8)(entry >> HUFFDEC_RESULT_SHIFT);
+			*out_next++ = byte(entry >> HUFFDEC_RESULT_SHIFT);
 			continue;
 		}
 
@@ -289,7 +291,7 @@ next_block:
 		 * end-of-block length, so subtract 1 and it turn it into
 		 * SIZE_MAX.  */
 		STATIC_ASSERT(HUFFDEC_END_OF_BLOCK_LENGTH == 0);
-		if (unlikely((size_t)length - 1 >= out_end - out_next)) {
+		if (unlikely(size_t(length) - 1 >= size_t(out_end - out_next))) {
 			if (unlikely(length != HUFFDEC_END_OF_BLOCK_LENGTH))
 				return LIBDEFLATE_INSUFFICIENT_SPACE;
 			goto block_done;
@@ -323,7 +325,7 @@ next_block:
 
 		/* The match source must not begin before the beginning of the
 		 * output buffer.  */
-		SAFETY_CHECK(offset <= out_next - (const u8 *)out);
+		SAFETY_CHECK(offset <= out_next - out);
 
 		/* Copy the match: 'length' bytes at 'out_next - offset' to
 		 * 'out_next'.  */
@@ -343,9 +345,9 @@ next_block:
 			copy_word_unaligned(out_next - offset + (2 * WORDBYTES),
 					    out_next + (2 * WORDBYTES));
 		} else {
-			const u8 *src = out_next - offset;
-			u8 *dst = out_next;
-			u8 *end = out_next + length;
+			const byte *src = out_next - offset;
+			byte *dst = out_next;
+			byte *end = out_next + length;
 
 			if (UNALIGNED_ACCESS_IS_FAST &&
 			    likely(out_end - end >= WORDBYTES - 1)) {
@@ -395,7 +397,7 @@ block_done:
 	/* That was the last block.  */
 
 	if (actual_out_nbytes_ret) {
-		*actual_out_nbytes_ret = out_next - (u8 *)out;
+		*actual_out_nbytes_ret = out_next - out;
 	} else {
 		if (out_next != out_end)
 			return LIBDEFLATE_SHORT_OUTPUT;

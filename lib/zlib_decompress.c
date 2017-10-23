@@ -34,12 +34,12 @@
 
 LIBDEFLATEAPI enum libdeflate_result
 libdeflate_zlib_decompress(struct libdeflate_decompressor *d,
-			   const void *in, size_t in_nbytes,
-			   void *out, size_t out_nbytes_avail,
+			   const byte *in, size_t in_nbytes,
+			   byte *out, size_t out_nbytes_avail,
 			   size_t *actual_out_nbytes_ret)
 {
-	const u8 *in_next = in;
-	const u8 * const in_end = in_next + in_nbytes;
+	const byte *in_next = in;
+	const byte * const in_end = in_next + in_nbytes;
 	u16 hdr;
 	size_t actual_out_nbytes;
 	enum libdeflate_result result;

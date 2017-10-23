@@ -35,7 +35,7 @@ static void
 show_usage(FILE *fp)
 {
 	fprintf(fp,
-"Usage: %"TS" [-A] [-h] [-s SIZE] [-t] [-Z] [FILE]...\n"
+"Usage: %" TS " [-A] [-h] [-s SIZE] [-t] [-Z] [FILE]...\n"
 "Calculate Adler-32 or CRC-32 checksums of the specified FILEs.\n"
 "\n"
 "Options:\n"
@@ -118,7 +118,7 @@ tmain(int argc, tchar *argv[])
 		case 's':
 			bufsize = tstrtoul(toptarg, NULL, 10);
 			if (bufsize == 0) {
-				msg("invalid chunk size: \"%"TS"\"", toptarg);
+				msg("invalid chunk size: \"%" TS "\"", toptarg);
 				return 1;
 			}
 			break;
@@ -176,12 +176,12 @@ tmain(int argc, tchar *argv[])
 				      &size, &elapsed);
 		if (ret == 0) {
 			if (do_timing) {
-				printf("%08"PRIx32"\t%"TS"\t"
+				printf("%08"PRIx32"\t%" TS "\t"
 				       "%"PRIu64" ms\t%"PRIu64" MB/s\n",
 				       sum, in.name, timer_ticks_to_ms(elapsed),
 				       timer_MB_per_s(size, elapsed));
 			} else {
-				printf("%08"PRIx32"\t%"TS"\t\n", sum, in.name);
+				printf("%08"PRIx32"\t%" TS "\t\n", sum, in.name);
 			}
 		}
 

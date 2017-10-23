@@ -62,18 +62,18 @@
  */
 
 static u32 ATTRIBUTES
-FUNCNAME(u32 adler, const void *buffer, size_t size)
+FUNCNAME(u32 adler, const byte *buffer, size_t size)
 {
 	u32 s1 = adler & 0xFFFF;
 	u32 s2 = adler >> 16;
-	const u8 *p = buffer;
-	const u8 * const end = p + size;
-	const u8 *vend;
+	const byte *p = buffer;
+	const byte * const end = p + size;
+	const byte *vend;
 
 	/* Process a byte at a time until the required alignment is reached. */
 	if (p != end && (uintptr_t)p % ALIGNMENT_REQUIRED) {
 		do {
-			s1 += *p++;
+			s1 += static_cast<u32>(*p++);
 			s2 += s1;
 		} while (p != end && (uintptr_t)p % ALIGNMENT_REQUIRED);
 		s1 %= DIVISOR;
@@ -90,7 +90,7 @@ FUNCNAME(u32 adler, const void *buffer, size_t size)
 	vend = end - ((size_t)(end - p) % BYTES_PER_ITERATION);
 	while (p != vend) {
 		size_t chunk_size;
-		const u8 *chunk_end;
+		const byte *chunk_end;
 
 		chunk_size = MIN((size_t)(vend - p), MAX_BYTES_PER_CHUNK);
 	#if TARGET == TARGET_SSE2
@@ -98,10 +98,6 @@ FUNCNAME(u32 adler, const void *buffer, size_t size)
 		 * *signed* overflow, otherwise the signed multiplication at the
 		 * end will not behave as desired. */
 		chunk_size = MIN(chunk_size, BYTES_PER_ITERATION * (0x7FFF / 0xFF));
-	#elif TARGET == TARGET_NEON
-		/* NEON: the 16-bit precision counters must not undergo
-		 * *unsigned* overflow. */
-		chunk_size = MIN(chunk_size, BYTES_PER_ITERATION * (0xFFFF / 0xFF));
 	#endif
 		chunk_size -= chunk_size % BYTES_PER_ITERATION;
 
@@ -112,7 +108,7 @@ FUNCNAME(u32 adler, const void *buffer, size_t size)
 	#if TARGET == TARGET_AVX2
 		/* AVX2 implementation */
 		const __m256i zeroes = _mm256_setzero_si256();
-		const __v32qi multipliers = (__v32qi) { 32, 31, 30, 29, 28, 27, 26, 25,
+		const __v32qi multipliers = __v32qi{ 32, 31, 30, 29, 28, 27, 26, 25,
 							24, 23, 22, 21, 20, 19, 18, 17,
 							16, 15, 14, 13, 12, 11, 10, 9,
 							8,  7,  6,  5,  4,  3,  2,  1 };
@@ -195,13 +191,13 @@ FUNCNAME(u32 adler, const void *buffer, size_t size)
 		/* Finish calculating the s2 counters. */
 		v_s2 = (__v4si)_mm_slli_epi32((__m128i)v_s2, 5);
 		v_s2 += (__v4si)_mm_madd_epi16((__m128i)v_byte_sums_a,
-					       (__m128i)(__v8hi){ 32, 31, 30, 29, 28, 27, 26, 25 });
+					       (__m128i) __v8hi{ 32, 31, 30, 29, 28, 27, 26, 25 });
 		v_s2 += (__v4si)_mm_madd_epi16((__m128i)v_byte_sums_b,
-					       (__m128i)(__v8hi){ 24, 23, 22, 21, 20, 19, 18, 17 });
+					       (__m128i) __v8hi{ 24, 23, 22, 21, 20, 19, 18, 17 });
 		v_s2 += (__v4si)_mm_madd_epi16((__m128i)v_byte_sums_c,
-					       (__m128i)(__v8hi){ 16, 15, 14, 13, 12, 11, 10, 9 });
+					       (__m128i) __v8hi{ 16, 15, 14, 13, 12, 11, 10, 9 });
 		v_s2 += (__v4si)_mm_madd_epi16((__m128i)v_byte_sums_d,
-					       (__m128i)(__v8hi){ 8,  7,  6,  5,  4,  3,  2,  1 });
+					       (__m128i) __v8hi{ 8,  7,  6,  5,  4,  3,  2,  1 });
 
 		/* Now accumulate what we computed into the real s1 and s2. */
 		v_s1 += (__v4si)_mm_shuffle_epi32((__m128i)v_s1, 0x31);
@@ -211,47 +207,6 @@ FUNCNAME(u32 adler, const void *buffer, size_t size)
 		v_s2 += (__v4si)_mm_shuffle_epi32((__m128i)v_s2, 0x31);
 		v_s2 += (__v4si)_mm_shuffle_epi32((__m128i)v_s2, 0x02);
 		s2 += _mm_cvtsi128_si32((__m128i)v_s2);
-
-	#elif TARGET == TARGET_NEON
-		/* ARM NEON (Advanced SIMD) implementation */
-		uint32x4_t v_s1 = (uint32x4_t) { 0, 0, 0, 0 };
-		uint32x4_t v_s2 = (uint32x4_t) { 0, 0, 0, 0 };
-		uint16x8_t v_byte_sums_a = (uint16x8_t) { 0, 0, 0, 0, 0, 0, 0, 0 };
-		uint16x8_t v_byte_sums_b = (uint16x8_t) { 0, 0, 0, 0, 0, 0, 0, 0 };
-		uint16x8_t v_byte_sums_c = (uint16x8_t) { 0, 0, 0, 0, 0, 0, 0, 0 };
-		uint16x8_t v_byte_sums_d = (uint16x8_t) { 0, 0, 0, 0, 0, 0, 0, 0 };
-
-		STATIC_ASSERT(ALIGNMENT_REQUIRED == 16 && BYTES_PER_ITERATION == 32);
-		do {
-			const uint8x16_t bytes1 = *(const uint8x16_t *)p;
-			const uint8x16_t bytes2 = *(const uint8x16_t *)(p + 16);
-			uint16x8_t tmp;
-
-			v_s2 += v_s1;
-
-			tmp = vpaddlq_u8(bytes1);
-			tmp = vpadalq_u8(tmp, bytes2);
-			v_s1 = vpadalq_u16(v_s1, tmp);
-
-			v_byte_sums_a = vaddw_u8(v_byte_sums_a, vget_low_u8(bytes1));
-			v_byte_sums_b = vaddw_u8(v_byte_sums_b, vget_high_u8(bytes1));
-			v_byte_sums_c = vaddw_u8(v_byte_sums_c, vget_low_u8(bytes2));
-			v_byte_sums_d = vaddw_u8(v_byte_sums_d, vget_high_u8(bytes2));
-
-		} while ((p += BYTES_PER_ITERATION) != chunk_end);
-
-		v_s2 = vqshlq_n_u32(v_s2, 5);
-		v_s2 = vmlal_u16(v_s2, vget_low_u16(v_byte_sums_a),  (uint16x4_t) { 32, 31, 30, 29 });
-		v_s2 = vmlal_u16(v_s2, vget_high_u16(v_byte_sums_a), (uint16x4_t) { 28, 27, 26, 25 });
-		v_s2 = vmlal_u16(v_s2, vget_low_u16(v_byte_sums_b),  (uint16x4_t) { 24, 23, 22, 21 });
-		v_s2 = vmlal_u16(v_s2, vget_high_u16(v_byte_sums_b), (uint16x4_t) { 20, 19, 18, 17 });
-		v_s2 = vmlal_u16(v_s2, vget_low_u16(v_byte_sums_c),  (uint16x4_t) { 16, 15, 14, 13 });
-		v_s2 = vmlal_u16(v_s2, vget_high_u16(v_byte_sums_c), (uint16x4_t) { 12, 11, 10,  9 });
-		v_s2 = vmlal_u16(v_s2, vget_low_u16 (v_byte_sums_d), (uint16x4_t) {  8,  7,  6,  5 });
-		v_s2 = vmlal_u16(v_s2, vget_high_u16(v_byte_sums_d), (uint16x4_t) {  4,  3,  2,  1 });
-
-		s1 += v_s1[0] + v_s1[1] + v_s1[2] + v_s1[3];
-		s2 += v_s2[0] + v_s2[1] + v_s2[2] + v_s2[3];
 	#else
 	#  error "BUG: unknown target"
 	#endif
@@ -264,7 +219,7 @@ FUNCNAME(u32 adler, const void *buffer, size_t size)
 	/* Process any remaining bytes. */
 	if (p != end) {
 		do {
-			s1 += *p++;
+			s1 += static_cast<u32>(*p++);
 			s2 += s1;
 		} while (p != end);
 		s1 %= DIVISOR;
