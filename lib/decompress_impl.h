@@ -48,11 +48,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 	bitbuf_t bitbuf = 0;
 	unsigned bitsleft = 0;
 	size_t overrun_count = 0;
-	unsigned i;
-	unsigned is_final_block;
-	unsigned block_type;
-	u16 len;
-	u16 nlen;
 	unsigned num_litlen_syms;
 	unsigned num_offset_syms;
 	u16 tmp16;
@@ -66,10 +61,10 @@ next_block:
 	ENSURE_BITS(1 + 2 + 5 + 5 + 4);
 
 	/* BFINAL: 1 bit  */
-	is_final_block = POP_BITS(1);
+	unsigned is_final_block = POP_BITS(1);
 
 	/* BTYPE: 2 bits  */
-	block_type = POP_BITS(2);
+	unsigned block_type = POP_BITS(2);
 
 	if (block_type == DEFLATE_BLOCKTYPE_DYNAMIC_HUFFMAN) {
 
@@ -95,14 +90,15 @@ next_block:
 
 		/* Read the precode codeword lengths.  */
 		STATIC_ASSERT(DEFLATE_MAX_PRE_CODEWORD_LEN == (1 << 3) - 1);
+        unsigned i = 0;
 		if (CAN_ENSURE(DEFLATE_NUM_PRECODE_SYMS * 3)) {
 
 			ENSURE_BITS(DEFLATE_NUM_PRECODE_SYMS * 3);
 
-			for (i = 0; i < num_explicit_precode_lens; i++)
+			for (; i < num_explicit_precode_lens; i++)
 				d->u.precode_lens[deflate_precode_lens_permutation[i]] = POP_BITS(3);
 		} else {
-			for (i = 0; i < num_explicit_precode_lens; i++) {
+			for (; i < num_explicit_precode_lens; i++) {
 				ENSURE_BITS(3);
 				d->u.precode_lens[deflate_precode_lens_permutation[i]] = POP_BITS(3);
 			}
@@ -204,8 +200,8 @@ next_block:
 
 		SAFETY_CHECK(in_end - in_next >= 4);
 
-		len = READ_U16();
-		nlen = READ_U16();
+		u16 len = READ_U16();
+		u16 nlen = READ_U16();
 
 		SAFETY_CHECK(len == (u16)~nlen);
 		if (unlikely(len > out_end - out_next))
@@ -228,7 +224,8 @@ next_block:
 		STATIC_ASSERT(DEFLATE_NUM_LITLEN_SYMS == 288);
 		STATIC_ASSERT(DEFLATE_NUM_OFFSET_SYMS == 32);
 
-		for (i = 0; i < 144; i++)
+        unsigned i = 0;
+		for (; i < 144; i++)
 			d->u.l.lens[i] = 8;
 		for (; i < 256; i++)
 			d->u.l.lens[i] = 9;
