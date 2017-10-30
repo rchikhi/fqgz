@@ -94,7 +94,7 @@ next_block:
 			d->u.precode_lens[deflate_precode_lens_permutation[i]] = 0;
 
 		/* Build the decode table for the precode.  */
-		SAFETY_CHECK(build_precode_decode_table(d));
+		assert(build_precode_decode_table(d));
 
 		/* Expand the literal/length and offset codeword lengths.  */
 		for (i = 0; i < num_litlen_syms + num_offset_syms; ) {
@@ -107,7 +107,7 @@ next_block:
 
 			/* (The code below assumes that the precode decode table
 			 * does not have any subtables.)  */
-			STATIC_ASSERT(PRECODE_TABLEBITS == DEFLATE_MAX_PRE_CODEWORD_LEN);
+			static_assert(PRECODE_TABLEBITS == DEFLATE_MAX_PRE_CODEWORD_LEN);
 
 			/* Read the next precode symbol.  */
 			entry = d->u.l.precode_decode_table[in_stream.bits(DEFLATE_MAX_PRE_CODEWORD_LEN)];
@@ -138,13 +138,13 @@ next_block:
 			 * 16', and 'presym == 17'.  For typical data this is
 			 * ordered from most frequent to least frequent case.
 			 */
-			STATIC_ASSERT(DEFLATE_MAX_LENS_OVERRUN == 138 - 1);
+			static_assert(DEFLATE_MAX_LENS_OVERRUN == 138 - 1);
 
 			if (presym == 16) {
 				/* Repeat the previous length 3 - 6 times  */
-				SAFETY_CHECK(i != 0);
+				assert(i != 0);
 				rep_val = d->u.l.lens[i - 1];
-				STATIC_ASSERT(3 + ((1 << 2) - 1) == 6);
+				static_assert(3 + ((1 << 2) - 1) == 6);
 				rep_count = 3 + in_stream.pop_bits(2);
 				d->u.l.lens[i + 0] = rep_val;
 				d->u.l.lens[i + 1] = rep_val;
@@ -155,7 +155,7 @@ next_block:
 				i += rep_count;
 			} else if (presym == 17) {
 				/* Repeat zero 3 - 10 times  */
-				STATIC_ASSERT(3 + ((1 << 3) - 1) == 10);
+				static_assert(3 + ((1 << 3) - 1) == 10);
 				rep_count = 3 + in_stream.pop_bits(3);
 				d->u.l.lens[i + 0] = 0;
 				d->u.l.lens[i + 1] = 0;
@@ -170,7 +170,7 @@ next_block:
 				i += rep_count;
 			} else {
 				/* Repeat zero 11 - 138 times  */
-				STATIC_ASSERT(11 + ((1 << 7) - 1) == 138);
+				static_assert(11 + ((1 << 7) - 1) == 138);
 				rep_count = 11 + in_stream.pop_bits(7);
 				memset(&d->u.l.lens[i], 0,
 				       rep_count * sizeof(d->u.l.lens[i]));
@@ -184,15 +184,15 @@ next_block:
 
 		in_stream.align_input();
 
-		SAFETY_CHECK(in_stream.size() >= 4);
+		assert(in_stream.size() >= 4);
 
 		u16 len = in_stream.pop_u16();
 		u16 nlen = in_stream.pop_u16();
 
-		SAFETY_CHECK(len == (u16)~nlen);
+		assert(len == (u16)~nlen);
 		if (unlikely(len > out_end - out_next))
 			return LIBDEFLATE_INSUFFICIENT_SPACE;
-		SAFETY_CHECK(len <= in_stream.size());
+		assert(len <= in_stream.size());
 
                 in_stream.copy(out_next, len);
 		out_next += len;
@@ -200,14 +200,14 @@ next_block:
 		goto block_done;
 
 	} else {
-		SAFETY_CHECK(block_type == DEFLATE_BLOCKTYPE_STATIC_HUFFMAN);
+		assert(block_type == DEFLATE_BLOCKTYPE_STATIC_HUFFMAN);
 
 		/* Static Huffman block: set the static Huffman codeword
 		 * lengths.  Then the remainder is the same as decompressing a
 		 * dynamic Huffman block.  */
 
-		STATIC_ASSERT(DEFLATE_NUM_LITLEN_SYMS == 288);
-		STATIC_ASSERT(DEFLATE_NUM_OFFSET_SYMS == 32);
+		static_assert(DEFLATE_NUM_LITLEN_SYMS == 288);
+		static_assert(DEFLATE_NUM_OFFSET_SYMS == 32);
 
         unsigned i = 0;
 		for (; i < 144; i++)
@@ -229,8 +229,8 @@ next_block:
 
 	/* Decompressing a Huffman block (either dynamic or static)  */
 
-	SAFETY_CHECK(build_offset_decode_table(d, num_litlen_syms, num_offset_syms));
-	SAFETY_CHECK(build_litlen_decode_table(d, num_litlen_syms, num_offset_syms));
+	assert(build_offset_decode_table(d, num_litlen_syms, num_offset_syms));
+	assert(build_litlen_decode_table(d, num_litlen_syms, num_offset_syms));
 
 	/* The main DEFLATE decode loop  */
 	for (;;) {
@@ -272,7 +272,7 @@ next_block:
 		 * end-of-block check.  We're using 0 for the special
 		 * end-of-block length, so subtract 1 and it turn it into
 		 * SIZE_MAX.  */
-		STATIC_ASSERT(HUFFDEC_END_OF_BLOCK_LENGTH == 0);
+		static_assert(HUFFDEC_END_OF_BLOCK_LENGTH == 0);
 		if (unlikely(size_t(length) - 1 >= size_t(out_end - out_next))) {
 			if (unlikely(length != HUFFDEC_END_OF_BLOCK_LENGTH))
 				return LIBDEFLATE_INSUFFICIENT_SPACE;
@@ -299,7 +299,7 @@ next_block:
 
 		/* The match source must not begin before the beginning of the
 		 * output buffer.  */
-		SAFETY_CHECK(offset <= out_next - out);
+		assert(offset <= out_next - out);
 
 		/* Copy the match: 'length' bytes at 'out_next - offset' to
 		 * 'out_next'.  */
