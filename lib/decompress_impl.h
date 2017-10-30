@@ -41,30 +41,23 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 			      byte * restrict out, size_t out_nbytes_avail,
 			      size_t *actual_out_nbytes_ret)
 {
+        InputStream in_stream(in, in_nbytes);
 	byte *out_next = out;
 	byte * const out_end = out_next + out_nbytes_avail;
-	const byte *in_next = in;
-	const byte * const in_end = in_next + in_nbytes;
-	bitbuf_t bitbuf = 0;
-	unsigned bitsleft = 0;
-	size_t overrun_count = 0;
+
+
 	unsigned num_litlen_syms;
 	unsigned num_offset_syms;
-	u16 tmp16;
-	u32 tmp32;
 
 next_block:
 	/* Starting to read the next block.  */
-	;
-
-	STATIC_ASSERT(CAN_ENSURE(1 + 2 + 5 + 5 + 4));
-	ENSURE_BITS(1 + 2 + 5 + 5 + 4);
+	in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
 
 	/* BFINAL: 1 bit  */
-	unsigned is_final_block = POP_BITS(1);
+	unsigned is_final_block = in_stream.pop_bits(1);
 
 	/* BTYPE: 2 bits  */
-	unsigned block_type = POP_BITS(2);
+	unsigned block_type = in_stream.pop_bits(2);
 
 	if (block_type == DEFLATE_BLOCKTYPE_DYNAMIC_HUFFMAN) {
 
@@ -79,30 +72,23 @@ next_block:
 
 		/* Read the codeword length counts.  */
 
-		STATIC_ASSERT(DEFLATE_NUM_LITLEN_SYMS == ((1 << 5) - 1) + 257);
-		num_litlen_syms = POP_BITS(5) + 257;
+		static_assert(DEFLATE_NUM_LITLEN_SYMS == ((1 << 5) - 1) + 257);
+		num_litlen_syms = in_stream.pop_bits(5) + 257;
 
-		STATIC_ASSERT(DEFLATE_NUM_OFFSET_SYMS == ((1 << 5) - 1) + 1);
-		num_offset_syms = POP_BITS(5) + 1;
+		static_assert(DEFLATE_NUM_OFFSET_SYMS == ((1 << 5) - 1) + 1);
+		num_offset_syms = in_stream.pop_bits(5) + 1;
 
-		STATIC_ASSERT(DEFLATE_NUM_PRECODE_SYMS == ((1 << 4) - 1) + 4);
-		num_explicit_precode_lens = POP_BITS(4) + 4;
+		static_assert(DEFLATE_NUM_PRECODE_SYMS == ((1 << 4) - 1) + 4);
+		num_explicit_precode_lens = in_stream.pop_bits(4) + 4;
 
 		/* Read the precode codeword lengths.  */
-		STATIC_ASSERT(DEFLATE_MAX_PRE_CODEWORD_LEN == (1 << 3) - 1);
-        unsigned i = 0;
-		if (CAN_ENSURE(DEFLATE_NUM_PRECODE_SYMS * 3)) {
+		static_assert(DEFLATE_MAX_PRE_CODEWORD_LEN == (1 << 3) - 1);
 
-			ENSURE_BITS(DEFLATE_NUM_PRECODE_SYMS * 3);
+                in_stream.ensure_bits<DEFLATE_NUM_PRECODE_SYMS * 3>();
 
-			for (; i < num_explicit_precode_lens; i++)
-				d->u.precode_lens[deflate_precode_lens_permutation[i]] = POP_BITS(3);
-		} else {
-			for (; i < num_explicit_precode_lens; i++) {
-				ENSURE_BITS(3);
-				d->u.precode_lens[deflate_precode_lens_permutation[i]] = POP_BITS(3);
-			}
-		}
+                unsigned i = 0;
+                for (; i < num_explicit_precode_lens; i++)
+                        d->u.precode_lens[deflate_precode_lens_permutation[i]] = in_stream.pop_bits(3);
 
 		for (; i < DEFLATE_NUM_PRECODE_SYMS; i++)
 			d->u.precode_lens[deflate_precode_lens_permutation[i]] = 0;
@@ -117,15 +103,15 @@ next_block:
 			u8 rep_val;
 			unsigned rep_count;
 
-			ENSURE_BITS(DEFLATE_MAX_PRE_CODEWORD_LEN + 7);
+			in_stream.ensure_bits<DEFLATE_MAX_PRE_CODEWORD_LEN + 7>();
 
 			/* (The code below assumes that the precode decode table
 			 * does not have any subtables.)  */
 			STATIC_ASSERT(PRECODE_TABLEBITS == DEFLATE_MAX_PRE_CODEWORD_LEN);
 
 			/* Read the next precode symbol.  */
-			entry = d->u.l.precode_decode_table[BITS(DEFLATE_MAX_PRE_CODEWORD_LEN)];
-			REMOVE_BITS(entry & HUFFDEC_LENGTH_MASK);
+			entry = d->u.l.precode_decode_table[in_stream.bits(DEFLATE_MAX_PRE_CODEWORD_LEN)];
+			in_stream.remove_bits(entry & HUFFDEC_LENGTH_MASK);
 			presym = entry >> HUFFDEC_RESULT_SHIFT;
 
 			if (presym < 16) {
@@ -159,7 +145,7 @@ next_block:
 				SAFETY_CHECK(i != 0);
 				rep_val = d->u.l.lens[i - 1];
 				STATIC_ASSERT(3 + ((1 << 2) - 1) == 6);
-				rep_count = 3 + POP_BITS(2);
+				rep_count = 3 + in_stream.pop_bits(2);
 				d->u.l.lens[i + 0] = rep_val;
 				d->u.l.lens[i + 1] = rep_val;
 				d->u.l.lens[i + 2] = rep_val;
@@ -170,7 +156,7 @@ next_block:
 			} else if (presym == 17) {
 				/* Repeat zero 3 - 10 times  */
 				STATIC_ASSERT(3 + ((1 << 3) - 1) == 10);
-				rep_count = 3 + POP_BITS(3);
+				rep_count = 3 + in_stream.pop_bits(3);
 				d->u.l.lens[i + 0] = 0;
 				d->u.l.lens[i + 1] = 0;
 				d->u.l.lens[i + 2] = 0;
@@ -185,7 +171,7 @@ next_block:
 			} else {
 				/* Repeat zero 11 - 138 times  */
 				STATIC_ASSERT(11 + ((1 << 7) - 1) == 138);
-				rep_count = 11 + POP_BITS(7);
+				rep_count = 11 + in_stream.pop_bits(7);
 				memset(&d->u.l.lens[i], 0,
 				       rep_count * sizeof(d->u.l.lens[i]));
 				i += rep_count;
@@ -196,20 +182,19 @@ next_block:
 		/* Uncompressed block: copy 'len' bytes literally from the input
 		 * buffer to the output buffer.  */
 
-		ALIGN_INPUT();
+		in_stream.align_input();
 
-		SAFETY_CHECK(in_end - in_next >= 4);
+		SAFETY_CHECK(in_stream.size() >= 4);
 
-		u16 len = READ_U16();
-		u16 nlen = READ_U16();
+		u16 len = in_stream.pop_u16();
+		u16 nlen = in_stream.pop_u16();
 
 		SAFETY_CHECK(len == (u16)~nlen);
 		if (unlikely(len > out_end - out_next))
 			return LIBDEFLATE_INSUFFICIENT_SPACE;
-		SAFETY_CHECK(len <= in_end - in_next);
+		SAFETY_CHECK(len <= in_stream.size());
 
-		memcpy(out_next, in_next, len);
-		in_next += len;
+                in_stream.copy(out_next, len);
 		out_next += len;
 
 		goto block_done;
@@ -254,16 +239,16 @@ next_block:
 		u32 offset;
 
 		/* Decode a litlen symbol.  */
-		ENSURE_BITS(DEFLATE_MAX_LITLEN_CODEWORD_LEN);
-		entry = d->u.litlen_decode_table[BITS(LITLEN_TABLEBITS)];
+		in_stream.ensure_bits<DEFLATE_MAX_LITLEN_CODEWORD_LEN>();
+		entry = d->u.litlen_decode_table[in_stream.bits(LITLEN_TABLEBITS)];
 		if (entry & HUFFDEC_SUBTABLE_POINTER) {
 			/* Litlen subtable required (uncommon case)  */
-			REMOVE_BITS(LITLEN_TABLEBITS);
+			in_stream.remove_bits(LITLEN_TABLEBITS);
 			entry = d->u.litlen_decode_table[
 				((entry >> HUFFDEC_RESULT_SHIFT) & 0xFFFF) +
-				BITS(entry & HUFFDEC_LENGTH_MASK)];
+				in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
 		}
-		REMOVE_BITS(entry & HUFFDEC_LENGTH_MASK);
+		in_stream.remove_bits(entry & HUFFDEC_LENGTH_MASK);
 		if (entry & HUFFDEC_LITERAL) {
 			/* Literal  */
 			if (unlikely(out_next == out_end))
@@ -275,12 +260,12 @@ next_block:
 		/* Match or end-of-block  */
 
 		entry >>= HUFFDEC_RESULT_SHIFT;
-		ENSURE_BITS(MAX_ENSURE);
+		in_stream.ensure_bits<in_stream.bitbuf_max_ensure>();
 
 		/* Pop the extra length bits and add them to the length base to
 		 * produce the full length.  */
 		length = (entry >> HUFFDEC_LENGTH_BASE_SHIFT) +
-			 POP_BITS(entry & HUFFDEC_EXTRA_LENGTH_BITS_MASK);
+			 in_stream.pop_bits(entry & HUFFDEC_EXTRA_LENGTH_BITS_MASK);
 
 		/* The match destination must not end after the end of the
 		 * output buffer.  For efficiency, combine this check with the
@@ -296,29 +281,21 @@ next_block:
 
 		/* Decode the match offset.  */
 
-		entry = d->offset_decode_table[BITS(OFFSET_TABLEBITS)];
+		entry = d->offset_decode_table[in_stream.bits(OFFSET_TABLEBITS)];
 		if (entry & HUFFDEC_SUBTABLE_POINTER) {
 			/* Offset subtable required (uncommon case)  */
-			REMOVE_BITS(OFFSET_TABLEBITS);
+			in_stream.remove_bits(OFFSET_TABLEBITS);
 			entry = d->offset_decode_table[
 				((entry >> HUFFDEC_RESULT_SHIFT) & 0xFFFF) +
-				BITS(entry & HUFFDEC_LENGTH_MASK)];
+				in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
 		}
-		REMOVE_BITS(entry & HUFFDEC_LENGTH_MASK);
+		in_stream.remove_bits(entry & HUFFDEC_LENGTH_MASK);
 		entry >>= HUFFDEC_RESULT_SHIFT;
-
-		STATIC_ASSERT(CAN_ENSURE(DEFLATE_MAX_EXTRA_LENGTH_BITS +
-					 DEFLATE_MAX_OFFSET_CODEWORD_LEN) &&
-			      CAN_ENSURE(DEFLATE_MAX_EXTRA_OFFSET_BITS));
-		if (!CAN_ENSURE(DEFLATE_MAX_EXTRA_LENGTH_BITS +
-				DEFLATE_MAX_OFFSET_CODEWORD_LEN +
-				DEFLATE_MAX_EXTRA_OFFSET_BITS))
-			ENSURE_BITS(DEFLATE_MAX_EXTRA_OFFSET_BITS);
 
 		/* Pop the extra offset bits and add them to the offset base to
 		 * produce the full offset.  */
 		offset = (entry & HUFFDEC_OFFSET_BASE_MASK) +
-			 POP_BITS(entry >> HUFFDEC_EXTRA_OFFSET_BITS_SHIFT);
+			 in_stream.pop_bits(entry >> HUFFDEC_EXTRA_OFFSET_BITS_SHIFT);
 
 		/* The match source must not begin before the beginning of the
 		 * output buffer.  */
