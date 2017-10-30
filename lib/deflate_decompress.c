@@ -175,6 +175,198 @@ struct libdeflate_decompressor {
  */
 typedef machine_word_t bitbuf_t;
 
+
+
+#include <cstdio>
+
+#undef NDEBUG //FIXME: forced debug
+
+#ifdef NDEBUG
+#define assert(expr)							\
+ (likely((expr))							\
+  ? static_cast<void>(0)						\
+  : __builtin_unreachable())
+#else
+#define assert(expr)							\
+ (likely((expr))							\
+  ? static_cast<void>(0)						\
+  : __assert_fail (#expr, __FILE__, __LINE__, __PRETTY_FUNCTION__))
+#endif
+
+[[noreturn]] inline void
+__assert_fail (const char *assertion, const char *file, unsigned int line, const char *function) noexcept {
+    std::fprintf(stderr, "%s:%u: Assertion '%s' failed in '%s'.\n",
+                 file, line, assertion, function);
+    std::fflush(stderr);
+    std::abort();
+}
+
+
+#include <algorithm>
+
+class InputStream {
+
+protected:
+    /** State */
+    bitbuf_t bitbuf; /// Bit buffer
+    size_t bitsleft; /// Number of valid bits in the bit buffer
+    size_t overrun_count;
+    const byte * restrict in_next; /// Read pointer
+    const byte * restrict const in_end; /// Adress of the byte after input
+
+    /**
+     * Fill the bitbuffer variable by reading the next word from the input buffer.
+     * This can be significantly faster than FILL_BITS_BYTEWISE().  However, for
+     * this to work correctly, the word must be interpreted in little-endian format.
+     * In addition, the memory access may be unaligned.  Therefore, this method is
+     * most efficient on little-endian architectures that support fast unaligned
+     * access, such as x86 and x86_64.
+     */
+    inline void fill_bits_wordwise() {
+        bitbuf |= get_unaligned_leword(in_next) << bitsleft;
+        in_next += (bitbuf_length - bitsleft) >> 3;
+        bitsleft += (bitbuf_length - bitsleft) & ~7;
+    }
+
+    /**
+     * Does the bitbuffer variable currently contain at least 'n' bits?
+     */
+    constexpr bool have_bits(size_t n) const
+    { return bitsleft >= n; }
+
+    /**
+     * Fill the bitbuffer variable, reading one byte at a time.
+     *
+     * Note: if we would overrun the input buffer, we just don't read anything,
+     * leaving the bits as 0 but marking them as filled.  This makes the
+     * implementation simpler because this removes the need to distinguish between
+     * "real" overruns and overruns that occur because of our own lookahead during
+     * Huffman decoding.  The disadvantage is that a "real" overrun can go
+     * undetected, and libdeflate_deflate_decompress() may return a success status
+     * rather than the expected failure status if one occurs.  However, this is
+     * irrelevant because even if this specific case were to be handled "correctly",
+     * one could easily come up with a different case where the compressed data
+     * would be corrupted in such a way that fully retains its validity.  Users
+     * should run a checksum against the uncompressed data if they wish to detect
+     * corruptions.
+     */
+    inline void fill_bits_bytewise() {
+        do {
+               if (likely(in_next != in_end))
+                       bitbuf |= (bitbuf_t)*in_next++ << bitsleft;
+               else
+                       overrun_count++;
+               bitsleft += 8;
+        } while (bitsleft <= bitbuf_length - 8);
+    }
+
+public:
+    InputStream(const byte* in, size_t len) : bitbuf(0), bitsleft(0), overrun_count(0),
+        in_next(in), in_end(in + len)
+    {}
+
+    /**
+     * Number of bits the bitbuffer variable can hold.
+     */
+    static constexpr size_t bitbuf_length = 8 * sizeof(bitbuf_t);
+
+    /**
+     * The maximum number of bits that can be requested to be in the bitbuffer
+     * variable.  This is the maximum value of 'n' that can be passed
+     * ENSURE_BITS(n).
+     *
+     * This not equal to BITBUF_NBITS because we never read less than one byte at a
+     * time.  If the bitbuffer variable contains more than (BITBUF_NBITS - 8) bits,
+     * then we can't read another byte without first consuming some bits.  So the
+     * maximum count we can ensure is (BITBUF_NBITS - 7).
+     */
+    static constexpr size_t bitbuf_max_ensure = bitbuf_length - 7;
+
+    constexpr size_t size() const {
+        return in_end - in_end;
+    }
+
+    /**
+     * Load more bits from the input buffer until the specified number of bits is
+     * present in the bitbuffer variable.  'n' cannot be too large; see MAX_ENSURE
+     * and CAN_ENSURE().
+     */
+    template <size_t n>
+    inline void ensure_bits() {
+        static_assert(n <= bitbuf_max_ensure, "Bit buffer is too small");
+        if (!have_bits(n)) {						\
+                if (likely(in_end - in_next >= static_cast<std::ptrdiff_t>(sizeof(bitbuf_t))))	\
+                        fill_bits_wordwise();				\
+                else fill_bits_bytewise();                              \
+        }
+    }
+
+    /**
+     * Return the next 'n' bits from the bitbuffer variable without removing them.
+     */
+    constexpr u32 bits(size_t n) const
+    {
+        assert(bitsleft >= n);
+        return  u32(bitbuf & ((u32(1) << n) - 1));
+    }
+
+    /**
+     * Remove the next 'n' bits from the bitbuffer variable.
+     */
+    inline void remove_bits(size_t n) {
+        assert(bitsleft >= n);
+        bitbuf >>= n;
+        bitsleft -= n;
+    }
+
+    /**
+     * Remove and return the next 'n' bits from the bitbuffer variable.
+     */
+    inline u32 pop_bits(size_t n) {
+        u32 tmp = bits(n);
+        remove_bits(n);
+        return tmp;
+    }
+
+    /**
+     * Align the input to the next byte boundary, discarding any remaining bits in
+     * the current byte.
+     *
+     * Note that if the bitbuffer variable currently contains more than 8 bits, then
+     * we must rewind 'in_next', effectively putting those bits back.  Only the bits
+     * in what would be the "current" byte if we were reading one byte at a time can
+     * be actually discarded.
+     */
+    inline void align_input() {
+        in_next -= (bitsleft >> 3) - std::min(overrun_count, bitsleft >> 3);
+        bitbuf = 0;
+        bitsleft = 0;
+    }
+
+    /**
+     * Read a 16-bit value from the input.  This must have been preceded by a call
+     * to ALIGN_INPUT(), and the caller must have already checked for overrun.
+     */
+    inline u16 pop_u16() {
+        assert(size() >= 2);
+        u16 tmp = get_unaligned_le16(in_next);
+        in_next += 2;
+        return tmp;
+    }
+
+
+    /**
+      * Copy n bytes to the ouput buffer. The input beffer must be aligned with a
+      * call to align_input()
+      */
+    inline void copy(byte* restrict out, size_t n) {
+        assert(size() >= n);
+        memcpy(out, in_next, n);
+        in_next += n;
+    }
+
+};
+
 /*
  * Number of bits the bitbuffer variable can hold.
  */
