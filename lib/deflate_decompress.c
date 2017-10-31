@@ -51,7 +51,7 @@
 
 #include "deflate_constants.h"
 #include "unaligned.h"
-#include "x86_cpu_features.h"
+//#include "x86_cpu_features.h"
 
 #include "libdeflate.h"
 
@@ -413,143 +413,159 @@ public:
  * - Bits 0 -- 7: codeword length
  */
 
+namespace table_builder {
+
+
+
 /*
  * This flag is set in all main decode table entries that represent subtable
  * pointers.
  */
-#define HUFFDEC_SUBTABLE_POINTER	0x80000000
+constexpr u32 HUFFDEC_SUBTABLE_POINTER = 0x80000000;
 
 /*
  * This flag is set in all entries in the litlen decode table that represent
  * literals.
  */
-#define HUFFDEC_LITERAL			0x40000000
+constexpr u32  HUFFDEC_LITERAL = 0x40000000;
 
 /* Mask for extracting the codeword length from a decode table entry.  */
-#define HUFFDEC_LENGTH_MASK		0xFF
+constexpr u32 HUFFDEC_LENGTH_MASK = 0xFF;
 
 /* Shift to extract the decode result from a decode table entry.  */
-#define HUFFDEC_RESULT_SHIFT		8
+constexpr size_t HUFFDEC_RESULT_SHIFT = 8;
 
 /* The decode result for each precode symbol.  There is no special optimization
  * for the precode; the decode result is simply the symbol value.  */
-static const u32 precode_decode_results[DEFLATE_NUM_PRECODE_SYMS] = {
+static constexpr u32 precode_decode_results[DEFLATE_NUM_PRECODE_SYMS] = {
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
 };
+
+
+constexpr u32 literal_entry(u32 literal) {
+    return (HUFFDEC_LITERAL >> HUFFDEC_RESULT_SHIFT) | literal;
+}
+
+constexpr u32 HUFFDEC_EXTRA_LENGTH_BITS_MASK = 0xFF;
+constexpr size_t HUFFDEC_LENGTH_BASE_SHIFT = 8;
+constexpr u32 HUFFDEC_END_OF_BLOCK_LENGTH = 0;
+
+constexpr u32 length_entry(u32 length_base, u32 num_extra_bits) {
+    return (length_base << HUFFDEC_LENGTH_BASE_SHIFT) | num_extra_bits;
+}
+
+
+
+
+
 
 /* The decode result for each litlen symbol.  For literals, this is the literal
  * value itself and the HUFFDEC_LITERAL flag.  For lengths, this is the length
  * base and the number of extra length bits.  */
-static const u32 litlen_decode_results[DEFLATE_NUM_LITLEN_SYMS] = {
-#define ENTRY(literal)	((HUFFDEC_LITERAL >> HUFFDEC_RESULT_SHIFT) | (literal))
+static constexpr u32 litlen_decode_results[DEFLATE_NUM_LITLEN_SYMS] = {
 
 	/* Literals  */
-	ENTRY(0)   , ENTRY(1)   , ENTRY(2)   , ENTRY(3)   ,
-	ENTRY(4)   , ENTRY(5)   , ENTRY(6)   , ENTRY(7)   ,
-	ENTRY(8)   , ENTRY(9)   , ENTRY(10)  , ENTRY(11)  ,
-	ENTRY(12)  , ENTRY(13)  , ENTRY(14)  , ENTRY(15)  ,
-	ENTRY(16)  , ENTRY(17)  , ENTRY(18)  , ENTRY(19)  ,
-	ENTRY(20)  , ENTRY(21)  , ENTRY(22)  , ENTRY(23)  ,
-	ENTRY(24)  , ENTRY(25)  , ENTRY(26)  , ENTRY(27)  ,
-	ENTRY(28)  , ENTRY(29)  , ENTRY(30)  , ENTRY(31)  ,
-	ENTRY(32)  , ENTRY(33)  , ENTRY(34)  , ENTRY(35)  ,
-	ENTRY(36)  , ENTRY(37)  , ENTRY(38)  , ENTRY(39)  ,
-	ENTRY(40)  , ENTRY(41)  , ENTRY(42)  , ENTRY(43)  ,
-	ENTRY(44)  , ENTRY(45)  , ENTRY(46)  , ENTRY(47)  ,
-	ENTRY(48)  , ENTRY(49)  , ENTRY(50)  , ENTRY(51)  ,
-	ENTRY(52)  , ENTRY(53)  , ENTRY(54)  , ENTRY(55)  ,
-	ENTRY(56)  , ENTRY(57)  , ENTRY(58)  , ENTRY(59)  ,
-	ENTRY(60)  , ENTRY(61)  , ENTRY(62)  , ENTRY(63)  ,
-	ENTRY(64)  , ENTRY(65)  , ENTRY(66)  , ENTRY(67)  ,
-	ENTRY(68)  , ENTRY(69)  , ENTRY(70)  , ENTRY(71)  ,
-	ENTRY(72)  , ENTRY(73)  , ENTRY(74)  , ENTRY(75)  ,
-	ENTRY(76)  , ENTRY(77)  , ENTRY(78)  , ENTRY(79)  ,
-	ENTRY(80)  , ENTRY(81)  , ENTRY(82)  , ENTRY(83)  ,
-	ENTRY(84)  , ENTRY(85)  , ENTRY(86)  , ENTRY(87)  ,
-	ENTRY(88)  , ENTRY(89)  , ENTRY(90)  , ENTRY(91)  ,
-	ENTRY(92)  , ENTRY(93)  , ENTRY(94)  , ENTRY(95)  ,
-	ENTRY(96)  , ENTRY(97)  , ENTRY(98)  , ENTRY(99)  ,
-	ENTRY(100) , ENTRY(101) , ENTRY(102) , ENTRY(103) ,
-	ENTRY(104) , ENTRY(105) , ENTRY(106) , ENTRY(107) ,
-	ENTRY(108) , ENTRY(109) , ENTRY(110) , ENTRY(111) ,
-	ENTRY(112) , ENTRY(113) , ENTRY(114) , ENTRY(115) ,
-	ENTRY(116) , ENTRY(117) , ENTRY(118) , ENTRY(119) ,
-	ENTRY(120) , ENTRY(121) , ENTRY(122) , ENTRY(123) ,
-	ENTRY(124) , ENTRY(125) , ENTRY(126) , ENTRY(127) ,
-	ENTRY(128) , ENTRY(129) , ENTRY(130) , ENTRY(131) ,
-	ENTRY(132) , ENTRY(133) , ENTRY(134) , ENTRY(135) ,
-	ENTRY(136) , ENTRY(137) , ENTRY(138) , ENTRY(139) ,
-	ENTRY(140) , ENTRY(141) , ENTRY(142) , ENTRY(143) ,
-	ENTRY(144) , ENTRY(145) , ENTRY(146) , ENTRY(147) ,
-	ENTRY(148) , ENTRY(149) , ENTRY(150) , ENTRY(151) ,
-	ENTRY(152) , ENTRY(153) , ENTRY(154) , ENTRY(155) ,
-	ENTRY(156) , ENTRY(157) , ENTRY(158) , ENTRY(159) ,
-	ENTRY(160) , ENTRY(161) , ENTRY(162) , ENTRY(163) ,
-	ENTRY(164) , ENTRY(165) , ENTRY(166) , ENTRY(167) ,
-	ENTRY(168) , ENTRY(169) , ENTRY(170) , ENTRY(171) ,
-	ENTRY(172) , ENTRY(173) , ENTRY(174) , ENTRY(175) ,
-	ENTRY(176) , ENTRY(177) , ENTRY(178) , ENTRY(179) ,
-	ENTRY(180) , ENTRY(181) , ENTRY(182) , ENTRY(183) ,
-	ENTRY(184) , ENTRY(185) , ENTRY(186) , ENTRY(187) ,
-	ENTRY(188) , ENTRY(189) , ENTRY(190) , ENTRY(191) ,
-	ENTRY(192) , ENTRY(193) , ENTRY(194) , ENTRY(195) ,
-	ENTRY(196) , ENTRY(197) , ENTRY(198) , ENTRY(199) ,
-	ENTRY(200) , ENTRY(201) , ENTRY(202) , ENTRY(203) ,
-	ENTRY(204) , ENTRY(205) , ENTRY(206) , ENTRY(207) ,
-	ENTRY(208) , ENTRY(209) , ENTRY(210) , ENTRY(211) ,
-	ENTRY(212) , ENTRY(213) , ENTRY(214) , ENTRY(215) ,
-	ENTRY(216) , ENTRY(217) , ENTRY(218) , ENTRY(219) ,
-	ENTRY(220) , ENTRY(221) , ENTRY(222) , ENTRY(223) ,
-	ENTRY(224) , ENTRY(225) , ENTRY(226) , ENTRY(227) ,
-	ENTRY(228) , ENTRY(229) , ENTRY(230) , ENTRY(231) ,
-	ENTRY(232) , ENTRY(233) , ENTRY(234) , ENTRY(235) ,
-	ENTRY(236) , ENTRY(237) , ENTRY(238) , ENTRY(239) ,
-	ENTRY(240) , ENTRY(241) , ENTRY(242) , ENTRY(243) ,
-	ENTRY(244) , ENTRY(245) , ENTRY(246) , ENTRY(247) ,
-	ENTRY(248) , ENTRY(249) , ENTRY(250) , ENTRY(251) ,
-	ENTRY(252) , ENTRY(253) , ENTRY(254) , ENTRY(255) ,
-#undef ENTRY
+	literal_entry(0)   , literal_entry(1)   , literal_entry(2)   , literal_entry(3)   ,
+	literal_entry(4)   , literal_entry(5)   , literal_entry(6)   , literal_entry(7)   ,
+	literal_entry(8)   , literal_entry(9)   , literal_entry(10)  , literal_entry(11)  ,
+	literal_entry(12)  , literal_entry(13)  , literal_entry(14)  , literal_entry(15)  ,
+	literal_entry(16)  , literal_entry(17)  , literal_entry(18)  , literal_entry(19)  ,
+	literal_entry(20)  , literal_entry(21)  , literal_entry(22)  , literal_entry(23)  ,
+	literal_entry(24)  , literal_entry(25)  , literal_entry(26)  , literal_entry(27)  ,
+	literal_entry(28)  , literal_entry(29)  , literal_entry(30)  , literal_entry(31)  ,
+	literal_entry(32)  , literal_entry(33)  , literal_entry(34)  , literal_entry(35)  ,
+	literal_entry(36)  , literal_entry(37)  , literal_entry(38)  , literal_entry(39)  ,
+	literal_entry(40)  , literal_entry(41)  , literal_entry(42)  , literal_entry(43)  ,
+	literal_entry(44)  , literal_entry(45)  , literal_entry(46)  , literal_entry(47)  ,
+	literal_entry(48)  , literal_entry(49)  , literal_entry(50)  , literal_entry(51)  ,
+	literal_entry(52)  , literal_entry(53)  , literal_entry(54)  , literal_entry(55)  ,
+	literal_entry(56)  , literal_entry(57)  , literal_entry(58)  , literal_entry(59)  ,
+	literal_entry(60)  , literal_entry(61)  , literal_entry(62)  , literal_entry(63)  ,
+	literal_entry(64)  , literal_entry(65)  , literal_entry(66)  , literal_entry(67)  ,
+	literal_entry(68)  , literal_entry(69)  , literal_entry(70)  , literal_entry(71)  ,
+	literal_entry(72)  , literal_entry(73)  , literal_entry(74)  , literal_entry(75)  ,
+	literal_entry(76)  , literal_entry(77)  , literal_entry(78)  , literal_entry(79)  ,
+	literal_entry(80)  , literal_entry(81)  , literal_entry(82)  , literal_entry(83)  ,
+	literal_entry(84)  , literal_entry(85)  , literal_entry(86)  , literal_entry(87)  ,
+	literal_entry(88)  , literal_entry(89)  , literal_entry(90)  , literal_entry(91)  ,
+	literal_entry(92)  , literal_entry(93)  , literal_entry(94)  , literal_entry(95)  ,
+	literal_entry(96)  , literal_entry(97)  , literal_entry(98)  , literal_entry(99)  ,
+	literal_entry(100) , literal_entry(101) , literal_entry(102) , literal_entry(103) ,
+	literal_entry(104) , literal_entry(105) , literal_entry(106) , literal_entry(107) ,
+	literal_entry(108) , literal_entry(109) , literal_entry(110) , literal_entry(111) ,
+	literal_entry(112) , literal_entry(113) , literal_entry(114) , literal_entry(115) ,
+	literal_entry(116) , literal_entry(117) , literal_entry(118) , literal_entry(119) ,
+	literal_entry(120) , literal_entry(121) , literal_entry(122) , literal_entry(123) ,
+	literal_entry(124) , literal_entry(125) , literal_entry(126) , literal_entry(127) ,
+	literal_entry(128) , literal_entry(129) , literal_entry(130) , literal_entry(131) ,
+	literal_entry(132) , literal_entry(133) , literal_entry(134) , literal_entry(135) ,
+	literal_entry(136) , literal_entry(137) , literal_entry(138) , literal_entry(139) ,
+	literal_entry(140) , literal_entry(141) , literal_entry(142) , literal_entry(143) ,
+	literal_entry(144) , literal_entry(145) , literal_entry(146) , literal_entry(147) ,
+	literal_entry(148) , literal_entry(149) , literal_entry(150) , literal_entry(151) ,
+	literal_entry(152) , literal_entry(153) , literal_entry(154) , literal_entry(155) ,
+	literal_entry(156) , literal_entry(157) , literal_entry(158) , literal_entry(159) ,
+	literal_entry(160) , literal_entry(161) , literal_entry(162) , literal_entry(163) ,
+	literal_entry(164) , literal_entry(165) , literal_entry(166) , literal_entry(167) ,
+	literal_entry(168) , literal_entry(169) , literal_entry(170) , literal_entry(171) ,
+	literal_entry(172) , literal_entry(173) , literal_entry(174) , literal_entry(175) ,
+	literal_entry(176) , literal_entry(177) , literal_entry(178) , literal_entry(179) ,
+	literal_entry(180) , literal_entry(181) , literal_entry(182) , literal_entry(183) ,
+	literal_entry(184) , literal_entry(185) , literal_entry(186) , literal_entry(187) ,
+	literal_entry(188) , literal_entry(189) , literal_entry(190) , literal_entry(191) ,
+	literal_entry(192) , literal_entry(193) , literal_entry(194) , literal_entry(195) ,
+	literal_entry(196) , literal_entry(197) , literal_entry(198) , literal_entry(199) ,
+	literal_entry(200) , literal_entry(201) , literal_entry(202) , literal_entry(203) ,
+	literal_entry(204) , literal_entry(205) , literal_entry(206) , literal_entry(207) ,
+	literal_entry(208) , literal_entry(209) , literal_entry(210) , literal_entry(211) ,
+	literal_entry(212) , literal_entry(213) , literal_entry(214) , literal_entry(215) ,
+	literal_entry(216) , literal_entry(217) , literal_entry(218) , literal_entry(219) ,
+	literal_entry(220) , literal_entry(221) , literal_entry(222) , literal_entry(223) ,
+	literal_entry(224) , literal_entry(225) , literal_entry(226) , literal_entry(227) ,
+	literal_entry(228) , literal_entry(229) , literal_entry(230) , literal_entry(231) ,
+	literal_entry(232) , literal_entry(233) , literal_entry(234) , literal_entry(235) ,
+	literal_entry(236) , literal_entry(237) , literal_entry(238) , literal_entry(239) ,
+	literal_entry(240) , literal_entry(241) , literal_entry(242) , literal_entry(243) ,
+	literal_entry(244) , literal_entry(245) , literal_entry(246) , literal_entry(247) ,
+	literal_entry(248) , literal_entry(249) , literal_entry(250) , literal_entry(251) ,
+	literal_entry(252) , literal_entry(253) , literal_entry(254) , literal_entry(255) ,
 
-#define HUFFDEC_EXTRA_LENGTH_BITS_MASK	0xFF
-#define HUFFDEC_LENGTH_BASE_SHIFT	8
-#define HUFFDEC_END_OF_BLOCK_LENGTH	0
 
-#define ENTRY(length_base, num_extra_bits) \
-	(((u32)(length_base) << HUFFDEC_LENGTH_BASE_SHIFT) | (num_extra_bits))
 
 	/* End of block  */
-	ENTRY(HUFFDEC_END_OF_BLOCK_LENGTH, 0),
+	length_entry(HUFFDEC_END_OF_BLOCK_LENGTH, 0),
 
 	/* Lengths  */
-	ENTRY(3  , 0) , ENTRY(4  , 0) , ENTRY(5  , 0) , ENTRY(6  , 0),
-	ENTRY(7  , 0) , ENTRY(8  , 0) , ENTRY(9  , 0) , ENTRY(10 , 0),
-	ENTRY(11 , 1) , ENTRY(13 , 1) , ENTRY(15 , 1) , ENTRY(17 , 1),
-	ENTRY(19 , 2) , ENTRY(23 , 2) , ENTRY(27 , 2) , ENTRY(31 , 2),
-	ENTRY(35 , 3) , ENTRY(43 , 3) , ENTRY(51 , 3) , ENTRY(59 , 3),
-	ENTRY(67 , 4) , ENTRY(83 , 4) , ENTRY(99 , 4) , ENTRY(115, 4),
-	ENTRY(131, 5) , ENTRY(163, 5) , ENTRY(195, 5) , ENTRY(227, 5),
-	ENTRY(258, 0) , ENTRY(258, 0) , ENTRY(258, 0) ,
-#undef ENTRY
+	length_entry(3  , 0) , length_entry(4  , 0) , length_entry(5  , 0) , length_entry(6  , 0),
+	length_entry(7  , 0) , length_entry(8  , 0) , length_entry(9  , 0) , length_entry(10 , 0),
+	length_entry(11 , 1) , length_entry(13 , 1) , length_entry(15 , 1) , length_entry(17 , 1),
+	length_entry(19 , 2) , length_entry(23 , 2) , length_entry(27 , 2) , length_entry(31 , 2),
+	length_entry(35 , 3) , length_entry(43 , 3) , length_entry(51 , 3) , length_entry(59 , 3),
+	length_entry(67 , 4) , length_entry(83 , 4) , length_entry(99 , 4) , length_entry(115, 4),
+	length_entry(131, 5) , length_entry(163, 5) , length_entry(195, 5) , length_entry(227, 5),
+	length_entry(258, 0) , length_entry(258, 0) , length_entry(258, 0) ,
+
 };
+
+
+constexpr size_t HUFFDEC_EXTRA_OFFSET_BITS_SHIFT = 16;
+constexpr u32 HUFFDEC_OFFSET_BASE_MASK = (1 << HUFFDEC_EXTRA_OFFSET_BITS_SHIFT) - 1;
+
+constexpr u32 offset_entry(u32 offset_base, u32 num_extra_bits) {
+    return offset_base | (num_extra_bits << HUFFDEC_EXTRA_OFFSET_BITS_SHIFT);
+}
 
 /* The decode result for each offset symbol.  This is the offset base and the
  * number of extra offset bits.  */
-static const u32 offset_decode_results[DEFLATE_NUM_OFFSET_SYMS] = {
-
-#define HUFFDEC_EXTRA_OFFSET_BITS_SHIFT 16
-#define HUFFDEC_OFFSET_BASE_MASK (((u32)1 << HUFFDEC_EXTRA_OFFSET_BITS_SHIFT) - 1)
-
-#define ENTRY(offset_base, num_extra_bits) \
-	((offset_base) | ((u32)(num_extra_bits) << HUFFDEC_EXTRA_OFFSET_BITS_SHIFT))
-	ENTRY(1     , 0)  , ENTRY(2     , 0)  , ENTRY(3     , 0)  , ENTRY(4     , 0)  ,
-	ENTRY(5     , 1)  , ENTRY(7     , 1)  , ENTRY(9     , 2)  , ENTRY(13    , 2) ,
-	ENTRY(17    , 3)  , ENTRY(25    , 3)  , ENTRY(33    , 4)  , ENTRY(49    , 4)  ,
-	ENTRY(65    , 5)  , ENTRY(97    , 5)  , ENTRY(129   , 6)  , ENTRY(193   , 6)  ,
-	ENTRY(257   , 7)  , ENTRY(385   , 7)  , ENTRY(513   , 8)  , ENTRY(769   , 8)  ,
-	ENTRY(1025  , 9)  , ENTRY(1537  , 9)  , ENTRY(2049  , 10) , ENTRY(3073  , 10) ,
-	ENTRY(4097  , 11) , ENTRY(6145  , 11) , ENTRY(8193  , 12) , ENTRY(12289 , 12) ,
-	ENTRY(16385 , 13) , ENTRY(24577 , 13) , ENTRY(32769 , 14) , ENTRY(49153 , 14) ,
-#undef ENTRY
+static constexpr u32 offset_decode_results[DEFLATE_NUM_OFFSET_SYMS] = {
+    offset_entry(1     , 0)  , offset_entry(2     , 0)  , offset_entry(3     , 0)  , offset_entry(4     , 0)  ,
+    offset_entry(5     , 1)  , offset_entry(7     , 1)  , offset_entry(9     , 2)  , offset_entry(13    , 2) ,
+    offset_entry(17    , 3)  , offset_entry(25    , 3)  , offset_entry(33    , 4)  , offset_entry(49    , 4)  ,
+    offset_entry(65    , 5)  , offset_entry(97    , 5)  , offset_entry(129   , 6)  , offset_entry(193   , 6)  ,
+    offset_entry(257   , 7)  , offset_entry(385   , 7)  , offset_entry(513   , 8)  , offset_entry(769   , 8)  ,
+    offset_entry(1025  , 9)  , offset_entry(1537  , 9)  , offset_entry(2049  , 10) , offset_entry(3073  , 10) ,
+    offset_entry(4097  , 11) , offset_entry(6145  , 11) , offset_entry(8193  , 12) , offset_entry(12289 , 12) ,
+    offset_entry(16385 , 13) , offset_entry(24577 , 13) , offset_entry(32769 , 14) , offset_entry(49153 , 14) ,
 };
 
 /* Construct a decode table entry from a decode result and codeword length.  */
@@ -605,25 +621,11 @@ build_decode_table(u32 decode_table[],
 		   const unsigned max_codeword_len,
 		   u16 working_space[])
 {
-	u16 * const len_counts = &working_space[0];
-	u16 * const offsets = &working_space[1 * (max_codeword_len + 1)];
-	u16 * const sorted_syms = &working_space[2 * (max_codeword_len + 1)];
-	unsigned len;
-	unsigned sym;
-	s32 remainder;
-	unsigned sym_idx;
-	unsigned codeword_len;
-	unsigned codeword_reversed = 0;
-	unsigned cur_codeword_prefix = -1;
-	unsigned cur_table_start = 0;
-	unsigned cur_table_bits = table_bits;
-	unsigned num_dropped_bits = 0;
-	const unsigned table_mask = (1U << table_bits) - 1;
-
 	/* Count how many symbols have each codeword length, including 0.  */
-	for (len = 0; len <= max_codeword_len; len++)
+        u16 * const len_counts = &working_space[0];
+	for (unsigned len = 0; len <= max_codeword_len; len++)
 		len_counts[len] = 0;
-	for (sym = 0; sym < num_syms; sym++)
+	for (unsigned sym = 0; sym < num_syms; sym++)
 		len_counts[lens[sym]]++;
 
 	/* Sort the symbols primarily by increasing codeword length and
@@ -631,12 +633,14 @@ build_decode_table(u32 decode_table[],
 
 	/* Initialize 'offsets' so that offsets[len] is the number of codewords
 	 * shorter than 'len' bits, including length 0.  */
+        u16 * const offsets = &working_space[1 * (max_codeword_len + 1)];
 	offsets[0] = 0;
-	for (len = 0; len < max_codeword_len; len++)
+	for (unsigned len = 0; len < max_codeword_len; len++)
 		offsets[len + 1] = offsets[len] + len_counts[len];
 
 	/* Use the 'offsets' array to sort the symbols.  */
-	for (sym = 0; sym < num_syms; sym++)
+        u16 * const sorted_syms = &working_space[2 * (max_codeword_len + 1)];
+	for (unsigned sym = 0; sym < num_syms; sym++)
 		sorted_syms[offsets[lens[sym]]++] = sym;
 
 	/* It is already guaranteed that all lengths are <= max_codeword_len,
@@ -644,8 +648,8 @@ build_decode_table(u32 decode_table[],
 	 * codeword of length n should require a proportion of the codespace
 	 * equaling (1/2)^n.  The code is complete if and only if, by this
 	 * measure, the codespace is exactly filled by the lengths.  */
-	remainder = 1;
-	for (len = 1; len <= max_codeword_len; len++) {
+	s32 remainder = 1;
+	for (unsigned len = 1; len <= max_codeword_len; len++) {
 		remainder <<= 1;
 		remainder -= len_counts[len];
 		if (unlikely(remainder < 0)) {
@@ -664,7 +668,7 @@ build_decode_table(u32 decode_table[],
 		 * never be used.  But since a malformed stream might contain
 		 * any bits at all, these entries need to be set anyway.  */
 		u32 entry = make_decode_table_entry(decode_results[0], 1);
-		for (sym = 0; sym < (1U << table_bits); sym++)
+		for (unsigned sym = 0; sym < (1U << table_bits); sym++)
 			decode_table[sym] = entry;
 
 		/* A completely empty code is permitted.  */
@@ -690,21 +694,23 @@ build_decode_table(u32 decode_table[],
 
 	/* Start with the smallest codeword length and the smallest-valued
 	 * symbol which has that codeword length.  */
-	sym_idx = offsets[0];
-	codeword_len = 1;
+
+	unsigned codeword_len = 1;
 	while (len_counts[codeword_len] == 0)
 		codeword_len++;
 
-	for (;;) {  /* For each used symbol and its codeword...  */
-		unsigned sym;
-		u32 entry;
-		unsigned i;
-		unsigned end;
-		unsigned increment;
-		unsigned bit;
+        unsigned codeword_reversed = 0;
+	unsigned cur_codeword_prefix = -1;
+	unsigned cur_table_start = 0;
+	unsigned cur_table_bits = table_bits;
+	unsigned num_dropped_bits = 0;
+        unsigned sym_idx = offsets[0];
+	const unsigned table_mask = (1U << table_bits) - 1;
 
+
+	for (;;) {  /* For each used symbol and its codeword...  */
 		/* Get the next symbol.  */
-		sym = sorted_syms[sym_idx];
+		unsigned sym = sorted_syms[sym_idx];
 
 		/* Start a new subtable if the codeword is long enough to
 		 * require a subtable, *and* the first 'table_bits' bits of the
@@ -712,7 +718,6 @@ build_decode_table(u32 decode_table[],
 		 * any.  */
 		if (codeword_len > table_bits &&
 		    (codeword_reversed & table_mask) != cur_codeword_prefix) {
-
 			cur_codeword_prefix = (codeword_reversed & table_mask);
 
 			cur_table_start += 1U << cur_table_bits;
@@ -757,7 +762,7 @@ build_decode_table(u32 decode_table[],
 		/* Create the decode table entry, which packs the decode result
 		 * and the codeword length (minus 'table_bits' for subtables)
 		 * together.  */
-		entry = make_decode_table_entry(decode_results[sym],
+		u32 entry = make_decode_table_entry(decode_results[sym],
 						codeword_len - num_dropped_bits);
 
 		/* Fill in as many copies of the decode table entry as are
@@ -766,18 +771,17 @@ build_decode_table(u32 decode_table[],
 		 * large as half the size of the table.  Since the codewords are
 		 * bit-reversed, the indices to fill are those with the codeword
 		 * in its low bits; it's the high bits that vary.  */
-		i = cur_table_start + (codeword_reversed >> num_dropped_bits);
-		end = cur_table_start + (1U << cur_table_bits);
-		increment = 1U << (codeword_len - num_dropped_bits);
-		do {
-			decode_table[i] = entry;
-			i += increment;
-		} while (i < end);
+		const unsigned end = cur_table_start + (1U << cur_table_bits);
+		const unsigned increment = 1U << (codeword_len - num_dropped_bits);
+                for(unsigned i = cur_table_start + (codeword_reversed >> num_dropped_bits) ;
+                    i < end ;
+                    i += increment)
+                    decode_table[i] = entry;
 
 		/* Advance to the next codeword by incrementing it.  But since
 		 * our codewords are bit-reversed, we must manipulate the bits
 		 * ourselves rather than simply adding 1.  */
-		bit = 1U << (codeword_len - 1);
+		unsigned bit = 1U << (codeword_len - 1);
 		while (codeword_reversed & bit)
 			bit >>= 1;
 		codeword_reversed &= bit - 1;
@@ -796,6 +800,9 @@ build_decode_table(u32 decode_table[],
 	}
 }
 
+
+
+
 /* Build the decode table for the precode.  */
 static bool
 build_precode_decode_table(struct libdeflate_decompressor *d)
@@ -803,7 +810,7 @@ build_precode_decode_table(struct libdeflate_decompressor *d)
 	/* When you change TABLEBITS, you must change ENOUGH, and vice versa! */
 	STATIC_ASSERT(PRECODE_TABLEBITS == 7 && PRECODE_ENOUGH == 128);
 
-	return build_decode_table(d->u.l.precode_decode_table,
+	return table_builder::build_decode_table(d->u.l.precode_decode_table,
 				  d->u.precode_lens,
 				  DEFLATE_NUM_PRECODE_SYMS,
 				  precode_decode_results,
@@ -845,6 +852,21 @@ build_offset_decode_table(struct libdeflate_decompressor *d,
 				  DEFLATE_MAX_OFFSET_CODEWORD_LEN,
 				  d->working_space);
 }
+
+} /* namespace table_builder */
+
+using table_builder::build_precode_decode_table;
+using table_builder::build_offset_decode_table;
+using table_builder::build_litlen_decode_table;
+using table_builder::HUFFDEC_LENGTH_MASK;
+using table_builder::HUFFDEC_RESULT_SHIFT;
+using table_builder::HUFFDEC_SUBTABLE_POINTER;
+using table_builder::HUFFDEC_LITERAL;
+using table_builder::HUFFDEC_LENGTH_BASE_SHIFT;
+using table_builder::HUFFDEC_EXTRA_LENGTH_BITS_MASK;
+using table_builder::HUFFDEC_END_OF_BLOCK_LENGTH;
+using table_builder::HUFFDEC_EXTRA_OFFSET_BITS_SHIFT;
+using table_builder::HUFFDEC_OFFSET_BASE_MASK;
 
 static forceinline machine_word_t
 repeat_byte(byte b)
