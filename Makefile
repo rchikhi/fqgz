@@ -21,7 +21,7 @@ cc-option = $(shell if $(CXX) $(1) -c -x c /dev/null -o /dev/null \
 	      1>&2 2>/dev/null; then echo $(1); fi)
 
 override CFLAGS :=							\
-	$(CFLAGS) -O2 -fomit-frame-pointer -std=c++17 -I. -Icommon	\
+	$(CFLAGS) -O0 -g -fomit-frame-pointer -std=c++14 -I. -Icommon	\
 	-Iexternal/type_safe/include					\
 	-Iexternal/type_safe/external/debug_assert			\
 	-Wall -Wundef							\
@@ -86,16 +86,20 @@ LIB_CFLAGS += $(CFLAGS) -fvisibility=hidden -D_ANSI_SOURCE
 
 LIB_HEADERS := $(wildcard lib/*.h)
 
-LIB_SRC := lib/aligned_malloc.c lib/deflate_decompress.c lib/x86_cpu_features.c
+LIB_SRC := lib/aligned_malloc.c lib/x86_cpu_features.c
+LIB_SRC_CXX := lib/deflate_decompress.cpp
 ifndef DISABLE_GZIP
     LIB_SRC += lib/gzip_decompress.c
 endif
 
 STATIC_LIB_OBJ := $(LIB_SRC:.c=.o)
+STATIC_LIB_OBJ_CXX := $(LIB_SRC_CXX:.cpp=.o)
 SHARED_LIB_OBJ := $(LIB_SRC:.c=.shlib.o)
 
 # Compile static library object files
 $(STATIC_LIB_OBJ): %.o: %.c $(LIB_HEADERS) $(COMMON_HEADERS) .lib-cflags
+	$(QUIET_CC) $(CXX) -o $@ -c $(LIB_CFLAGS) $<
+$(STATIC_LIB_OBJ_CXX): %.o: %.cpp $(LIB_HEADERS) $(COMMON_HEADERS) .lib-cflags
 	$(QUIET_CC) $(CXX) -o $@ -c $(LIB_CFLAGS) $<
 
 # Compile shared library object files
@@ -103,7 +107,7 @@ $(SHARED_LIB_OBJ): %.shlib.o: %.c $(LIB_HEADERS) $(COMMON_HEADERS) .lib-cflags
 	$(QUIET_CC) $(CXX) -o $@ -c $(LIB_CFLAGS) $(SHARED_LIB_CFLAGS) -DLIBDEFLATE_DLL $<
 
 # Create static library
-$(STATIC_LIB):$(STATIC_LIB_OBJ)
+$(STATIC_LIB):$(STATIC_LIB_OBJ) $(STATIC_LIB_OBJ_CXX)
 	$(QUIET_AR) $(AR) cr $@ $+
 
 DEFAULT_TARGETS += $(STATIC_LIB)
@@ -112,7 +116,7 @@ DEFAULT_TARGETS += $(STATIC_LIB)
 $(SHARED_LIB):$(SHARED_LIB_OBJ)
 	$(QUIET_CCLD) $(CXX) -o $@ $(LDFLAGS) $(LIB_CFLAGS) -shared $+
 
-DEFAULT_TARGETS += $(SHARED_LIB)
+#DEFAULT_TARGETS += $(SHARED_LIB)
 
 # Rebuild if CC or LIB_CFLAGS changed
 .lib-cflags: FORCE

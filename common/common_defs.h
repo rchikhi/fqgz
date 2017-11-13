@@ -40,7 +40,9 @@
 /*                              Type definitions                              */
 /* ========================================================================== */
 
-#include <stddef.h> /* size_t */
+#include <cstdlib>
+#include <cstddef> /* size_t */
+
 
 #ifndef __bool_true_false_are_defined
 #  include <stdbool.h> /* bool */
@@ -59,7 +61,12 @@ typedef int16_t s16;
 typedef int32_t s32;
 typedef int64_t s64;
 #include <cstddef>
+
+#ifdef __cpp_lib_byte
 using byte = std::byte;
+#else
+using byte = unsigned char;
+#endif
 
 /*
  * Word type of the target architecture.  Use 'size_t' instead of 'unsigned
