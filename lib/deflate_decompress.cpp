@@ -51,6 +51,11 @@
 
 #include <stdexcept>
 
+#include <unistd.h>
+#include <sys/mman.h>
+
+#include "system.h"
+
 #include "deflate_constants.h"
 #include "unaligned.h"
 
@@ -1013,6 +1018,73 @@ void prepare_static(struct libdeflate_decompressor * restrict d) {
     assert(build_offset_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS));
     assert(build_litlen_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS));
 }
+
+using namespace utils::system::except;
+
+template <typename T>
+class WrappedBuffer {
+#define ERROR_PREFIX "WrappedCircularBuffer: "
+
+
+public:
+    T* _data;    /// Allocated buffer
+    T* _wrapped; /// Wrapped buffer before data, such that wrapped + reflected = data
+    const T* _end; /// Past the end pointer
+
+
+    WrappedBuffer(size_t capacity, size_t reflected) {
+        constexpr size_t real_T_size = std::max(alignof(T), sizeof(T)); // For over-aligned types
+        constexpr size_t buffer_size = real_T_size * capacity;
+        constexpr size_t reflected_size = real_T_size * reflected;
+        constexpr size_t total_size = reflected_size + buffer_size;
+        assert(reflected <= capacity);
+
+        // Create an unlinked file sized by the buffer
+        std::string path = "/tmp/cb-XXXXXX";
+        const int fd = check_ret(mkstemp(path.data()),
+                                 ERROR_PREFIX "Cannot create temporary file");
+        check_ret(unlink(path.data()),
+                  ERROR_PREFIX "Cannot unlink temporary file");
+        check_ret(ftruncate(fd, buffer_size),
+                  ERROR_PREFIX "Cannot set size of temporary file");
+
+        // Total contiguous buffer
+        _wrapped = check_ptr(static_cast<T*>(
+                   mmap(NULL, total_size, PROT_NONE,
+                        MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)),
+                   ERROR_PREFIX "Cannot allocate primary buffer");
+        if((uintptr_t)_data % alignof(T) != 0)
+            throw std::bad_alloc();
+
+        // Reflected part (offseted in the mapped file)
+        if (_wrapped != static_cast<T*>(
+                    mmap(_data, reflected_size, PROT_READ | PROT_WRITE,
+                         MAP_FIXED | MAP_SHARED, fd, buffer_size - reflected_size)))
+            throw_syserr(ERROR_PREFIX "Cannot map reflected buffer");
+
+        // "Real" buffer part (full mapped file)
+        _data = static_cast<T*>(
+                    mmap(_wrapped + reflected_size, buffer_size, PROT_READ | PROT_WRITE,
+                         MAP_FIXED | MAP_SHARED, fd, 0));
+        if (_data != _wrapped + reflected_size)
+            throw_syserr(ERROR_PREFIX "Cannot map buffer");
+
+        _end = _data + buffer_size;
+
+        check_ret(close(fd),
+                  ERROR_PREFIX "Cannot close temporary file");
+    }
+
+    operator T*() const { return _data; }
+    T* end() const { return _end; }
+
+    ~WrappedBuffer() {
+        check_ret(munmap(_wrapped, _end - _wrapped),
+                  ERROR_PREFIX "Cannot deallocate the memory mapping");
+    }
+
+#undef ERROR_PREFIX
+};
 
 
 class DeflateWindow {
