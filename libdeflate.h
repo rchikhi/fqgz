@@ -239,7 +239,7 @@ LIBDEFLATEAPI enum libdeflate_result
 libdeflate_gzip_decompress(struct libdeflate_decompressor *decompressor,
 			   const byte *in, size_t in_nbytes,
 			   byte *out, size_t out_nbytes_avail,
-			   size_t *actual_out_nbytes_ret);
+			   size_t *actual_out_nbytes_ret, int skip);
 
 /*
  * libdeflate_free_decompressor() frees a decompressor that was allocated with

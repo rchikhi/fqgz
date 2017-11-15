@@ -56,20 +56,9 @@
 
 #include "libdeflate.h"
 
-/*
- * If the expression passed to SAFETY_CHECK() evaluates to false, then the
- * decompression routine immediately returns LIBDEFLATE_BAD_DATA, indicating the
- * compressed data is invalid.
- *
- * Theoretically, these checks could be disabled for specialized applications
- * where all input to the decompressor will be trusted.
- */
-#if 0
-#  pragma message("UNSAFE DECOMPRESSION IS ENABLED. THIS MUST ONLY BE USED IF THE DECOMPRESSOR INPUT WILL ALWAYS BE TRUSTED!")
-#  define SAFETY_CHECK(expr)	(void)(expr)
-#else
-#  define SAFETY_CHECK(expr)	if (unlikely(!(expr))) return LIBDEFLATE_BAD_DATA
-#endif
+//#define PRINT_DEBUG(...) {}
+#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
+
 
 /*
  * Each TABLEBITS number is the base-2 logarithm of the number of entries in the
@@ -211,8 +200,8 @@ public: //protected:
     bitbuf_t bitbuf; /// Bit buffer
     size_t bitsleft; /// Number of valid bits in the bit buffer
     size_t overrun_count;
-    const byte * restrict in_next; /// Read pointer
-    const byte * restrict const in_end; /// Adress of the byte after input
+    const byte * /*restrict (FIXME: Rayan had to comment that, in the code that calls do_block)*/ in_next; /// Read pointer
+    const byte * /*restrict (same) const*/ in_end; /// Adress of the byte after input
 
     /**
      * Fill the bitbuffer variable by reading the next word from the input buffer.
@@ -283,7 +272,7 @@ public:
     static constexpr size_t bitbuf_max_ensure = bitbuf_length - 7;
 
     inline size_t size() const {
-        return in_end - in_end;
+        return in_end - in_next;
     }
 
     /**
@@ -894,7 +883,7 @@ public:
     DeflateException(enum libdeflate_result): runtime_error("DeflateException") {}
 };
 
-void prepare_dynamic(struct libdeflate_decompressor * restrict d,
+bool prepare_dynamic(struct libdeflate_decompressor * restrict d,
                                               InputStream& in_stream) {
 
 
@@ -918,7 +907,8 @@ void prepare_dynamic(struct libdeflate_decompressor * restrict d,
             d->u.precode_lens[deflate_precode_lens_permutation[i]] = 0;
 
     /* Build the decode table for the precode.  */
-    assert(build_precode_decode_table(d));
+    if (!build_precode_decode_table(d))
+        return false;
 
     /* Expand the literal/length and offset codeword lengths.  */
     for (unsigned i = 0; i < num_litlen_syms + num_offset_syms; ) {
@@ -959,7 +949,11 @@ void prepare_dynamic(struct libdeflate_decompressor * restrict d,
              */
             if (presym == 16) {
                     /* Repeat the previous length 3 - 6 times  */
-                    assert(i != 0);
+                    if (!(i != 0))
+                    {
+                        PRINT_DEBUG("fail at (i!=0)\n");
+                        return false;
+                    }
                     const u8 rep_val = d->u.l.lens[i - 1];
                     const unsigned rep_count = 3 + in_stream.pop_bits(2);
                     d->u.l.lens[i + 0] = rep_val;
@@ -992,12 +986,22 @@ void prepare_dynamic(struct libdeflate_decompressor * restrict d,
             }
     }
 
-    assert(build_offset_decode_table(d, num_litlen_syms, num_offset_syms));
-    assert(build_litlen_decode_table(d, num_litlen_syms, num_offset_syms));
+    if (!build_offset_decode_table(d, num_litlen_syms, num_offset_syms))
+    {
+        PRINT_DEBUG("fail at build_offset_decode_table(d, num_litlen_syms, num_offset_syms)\n");
+        return false;
+    }
+    if (!build_litlen_decode_table(d, num_litlen_syms, num_offset_syms))
+    {
+        PRINT_DEBUG("fail at build_litlen_decode_table(d, num_litlen_syms, num_offset_syms)\n");
+        return false;
+    }
+
+    return true;
 }
 
 
-void prepare_static(struct libdeflate_decompressor * restrict d) {
+bool prepare_static(struct libdeflate_decompressor * restrict d) {
     /* Static Huffman block: set the static Huffman codeword
      * lengths.  Then the remainder is the same as decompressing a
      * dynamic Huffman block.  */
@@ -1012,32 +1016,47 @@ void prepare_static(struct libdeflate_decompressor * restrict d) {
     for (unsigned i = DEFLATE_NUM_LITLEN_SYMS; i < DEFLATE_NUM_LITLEN_SYMS + DEFLATE_NUM_OFFSET_SYMS; i++)
             d->u.l.lens[i] = 5;
 
-    assert(build_offset_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS));
-    assert(build_litlen_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS));
+    if (!build_offset_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS))
+    {
+        PRINT_DEBUG("fail at build_offset_decode_table, static case\n");
+        return false;
+    }
+    if (!build_litlen_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS))
+    {
+        PRINT_DEBUG("fail at build_litlen_decode_table, static case \n");
+        return false;
+    }
+
+    return true;
 }
+
+#define window_bits 20
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
  */
 class DeflateWindow {
 public:
-    DeflateWindow(size_t window_bits, byte* target, byte* target_end) :
+    DeflateWindow(byte* target, byte* target_end) :
         target(target), target_end(target_end),
+        has_dummy_32k(true),
         buffer(new byte[1 << window_bits]), buffer_end(buffer + (1 << window_bits)) {
         clear();
     }
 
-    ~DeflateWindow() {
+    ~DeflateWindow()    {
         delete[] buffer;
     }
 
     void clear() {
-        next = buffer;
+        for (int i = 0; i < (1<<15); i ++)
+            buffer[i] = '?';
+        next = buffer+(1<<15); // this is for decompression at the middle of the file: the very first buffer will have a 32k context that consists of '?'s
 
         blk_count = 0;
-        current_blk = buffer;
-        first_ref = buffer;
-        first_blk = buffer;
+        current_blk = next;
+        first_ref = next;
+        first_blk = next;
     }
 
     unsigned size() const
@@ -1046,18 +1065,36 @@ public:
     unsigned available() const
     { return buffer_end - next; }
 
-    void push(byte c) {
-        assert(next < buffer_end);
-        assert(available() > 0);
+    bool push(byte c) {
+        if (!(next < buffer_end))
+        {
+            PRINT_DEBUG("window buffer overflow: %d/%d",size(),1<<window_bits);
+            return false;
+        }
         *next++ = c;
+        return true;
     }
 
-    void copy_match(unsigned length, unsigned offset) {
+    /* return true if it's a reasonable offset, otherwise false */
+    bool copy_match(unsigned length, unsigned offset) {
+        //fprintf(stderr,"want to copy match of length %d, offset %d (window size %d)\n",(int)length,(int)offset, size());
         /* The match source must not begin before the beginning of the
          * output buffer.  */
-        assert(offset <= size());
-        assert(available() >= length);
-        assert(offset > 0);
+        if (!(offset <= size()))
+        {
+            PRINT_DEBUG("fail, copy_match, offset %d (window size %d)\n",(int)offset, size());
+            return false;
+        }
+        if (!(available() >= length))
+        {
+            PRINT_DEBUG("fail, copy_match, length too large\n");
+            return false;
+        }
+        if (!(offset > 0))
+        {
+            PRINT_DEBUG("fail, copy_match, offset 0\n");
+            return false;
+        }
 
         if(unlikely(first_ref > next - offset)) {
             first_ref = next - offset;
@@ -1115,8 +1152,18 @@ public:
                 } while (dst < dst_end);
             }
         }
-
+/*
+        unsigned char match[length];
+        int i;
+        for (unsigned i =0; i < length; i++)
+        {
+           match[i] = 'x'; //buffer[next-buffer];
+        }
+        match[length]='\0';*/
+        //fprintf(stderr,"match %s length, offset: %s %d %d\n",match,(int)length,(int)offset);
+        //fprintf(stderr,"match %s\n",match);
         next += length;
+        return true;
     }
 
     void copy(InputStream & in, unsigned length) {
@@ -1131,27 +1178,52 @@ public:
         return next - buffer;
     }
 
-    void flush() {
+    /* called when the window is full.
+     * note: not necessarily at the end of a block */ 
+    bool flush() {
         assert(next >= current_blk);
 
         // Keep 32K of context, or the current unfinished block
         const size_t keep_size = std::max((size_t)1 << 15, (size_t)(next - current_blk));
         if(size() > keep_size ) { // allways true, currently at least
+            /* what's going to happen
+             * buffer 
+             *
+             * pos 0 [ 
+             *   (maybe a dummy 32k context, if it's the first time we flush the buffer)
+             *   --------
+             *   some other content that's going to be evicted (a copied to target)
+             *   --------
+             *   content that will be kept (going to be the future context)
+             *  ] pos next
+             *
+             *  becomes
+             *
+             *  pos 0 [
+             *  content that will be kept
+             *  ------
+             *  ] pos next
+             *
+             */
             // Flush the buffer
-            const size_t evict_size = size() - keep_size;
+            assert(size() >= keep_size);
+            size_t evict_size = size() - keep_size;
+            assert(buffer + evict_size == next - keep_size);
 
-            printf("shard of 0x%06lx bytes and %d blocks required 0x%04lx bytes context\n",
+            //printf("shard of 0x%06lx bytes and %d blocks required 0x%04lx bytes context\n",
+            printf("shard of %6ld bytes and %d blocks required %4ld bytes context\n", // i like decimals
                    current_blk - first_blk,
                    blk_count,
-                   first_blk - first_ref);
+                   first_blk - first_ref); // Rayan: i don't understand this first_blk-first_ref
 
-            // Copy to target buffer
+            if (has_dummy_32k) 
+                evict_size -= (1<<15);
             assert(target + evict_size < target_end);
-            memcpy(target, buffer, evict_size);
+            memcpy(target, buffer + (has_dummy_32k ? (1<<15) : 0), evict_size);
+            has_dummy_32k = false;
             target += evict_size;
 
             // Copy the kept section
-            assert(buffer + evict_size == next - keep_size);
             assert(buffer + keep_size < next - keep_size);
             memcpy(buffer, next - keep_size, keep_size);
             next = buffer + keep_size;
@@ -1162,56 +1234,109 @@ public:
             first_blk = current_blk;
             first_ref = first_blk;
         }
+        return true;
     }
 
     void final_flush() {
         assert(current_blk == next);
-        printf("shard of 0x%06lx bytes and %d blocks required 0x%04lx bytes context\n",
+        //printf("shard of 0x%06lx bytes and %d blocks required 0x%04lx bytes context\n",
+        printf("final shard of %6ld bytes and %d blocks required %4ld bytes context\n",
                next - first_blk,
                blk_count,
                first_blk - first_ref);
 
-        assert(target + size() >= target_end);
-        memcpy(target, buffer, size());
+        // assert(target + size() >= target_end); // Rayan:  I'm removing this assert because in the future, we won't know the target_end (=uncompressed size)
+        memcpy(target, buffer + (has_dummy_32k?(1<<15):0), size() - (has_dummy_32k?(1<<15):0));
     }
 
     void notify_end_block(bool is_final_block, InputStream& in_stream){
-        printf("block size was 0x%06lx %lx %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count);
+        //printf("block size was 0x%06lx %lx %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count);
+        
+        printf("block size was %d %ld %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count); // i like my numbers decimals
         current_blk = next;
         blk_count++;
     }
 
+    // make sure the buffer contains at least something that looks like fastq
+    bool check_buffer_fastq()
+    {
+        int nb_nucl = 0;
+        PRINT_DEBUG("beginning fastq check, bounds %d %d\n",next-(1<<15) - buffer, next - buffer);
+        for (int  i = next-(1<<15) - buffer;i < next - buffer; i ++)
+        {
+            if ( buffer[i] == 'A' || buffer[i] == 'T' || buffer[i] == 'C' || buffer[i] == 'G')
+                nb_nucl++;
+        }
+        return nb_nucl > 200;
+    }
+
+    void backup(DeflateWindow &other) {
+        memcpy(other.buffer, buffer, size());
+        other.next        = other.buffer + (next-buffer);
+        other.first_blk   = other.buffer + (first_blk-buffer);
+        other.first_ref   = other.buffer + (first_ref-buffer);
+        other.current_blk = other.buffer + (current_blk-buffer);
+/*        other.target      = target; // shouldn't need to save/restore target, because failed blocks actually _shouldn't_ touch target
+        other.target_end  = target_end;*/
+        other.blk_count   = blk_count;
+    }
+
+    void restore(DeflateWindow &other) {
+        memcpy(buffer, other.buffer, other.size());
+        next        = buffer + (other.next-other.buffer);
+        first_blk   = buffer + (other.first_blk-other.buffer);
+        first_ref   = buffer + (other.first_ref-other.buffer);
+        current_blk = buffer + (other.current_blk-other.buffer);
+        blk_count   = other.blk_count;
+    }
+
 protected:
     byte* target;
-    const byte* target_end;
+    /*const*/ byte* target_end;
 
-    unsigned blk_count; /// Number of decoded block in the buffer
-    byte* current_blk; /// First byte decoded in the current block
-    byte* first_blk; /// First block in the buffer
-    byte* first_ref; /// First backref
+    bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
+    unsigned blk_count; /// Number of decoded blocks currently in the buffer 
+    byte* current_blk; /// Start position of the current block in the buffer
+    byte* first_blk; /// Start position of the block that is currently first in the buffer
+    byte* first_ref; /// First backref (just to keep track)
 
 
-    byte* const buffer; /// Allocated ouput buffer
-    const byte* const buffer_end; /// Past the end pointer
+    byte /* const (FIXME, Rayan: same as InputStream*/ *buffer; /// Allocated output buffer  
+    /*const*/ byte* /*const FIXME: Rayan, same as InputStream*/ buffer_end; /// Past the end pointer
     byte* next; /// Next byte to be written
 };
 
 
 
 
-void do_uncompressed(InputStream& in_stream, DeflateWindow& out) {
+bool do_uncompressed(InputStream& in_stream, DeflateWindow& out) {
     /* Uncompressed block: copy 'len' bytes literally from the input
      * buffer to the output buffer.  */
 
     in_stream.align_input();
 
-    assert(in_stream.size() >= 4);
+    if (!(in_stream.size() >= 4))
+    {
+        PRINT_DEBUG("bad block (trivially due to uncompressed check)\n");
+        return false;
+    }
 
     u16 len = in_stream.pop_u16();
     u16 nlen = in_stream.pop_u16();
 
-    assert(len == (u16)~nlen);
-    assert(len <= in_stream.size());
+    if (!(len == (u16)~nlen))
+    {
+        PRINT_DEBUG("bad block (trivially due to uncompressed check)\n");
+        return false;
+    }
+
+    if (!(len <= in_stream.size()))
+    {
+        PRINT_DEBUG("bad block (trivially due to uncompressed check)\n");
+        return false;
+    }
+
+
 
     out.copy(in_stream, len);
 }
@@ -1219,31 +1344,45 @@ void do_uncompressed(InputStream& in_stream, DeflateWindow& out) {
 
 
 
-bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, DeflateWindow& out)
+/* return true if block decompression went smoothly, false if not (probably due to corrupt data) */
+bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, DeflateWindow& out, bool &is_final_block)
 {
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
 
-    /* BFINAL: 1 bit  */
-    const bool is_final_block = in_stream.pop_bits(1);
+    if (in_stream.size() == 0) // Rayan: i've added that check but i doubt it's useful (actually.. maybe it is, if we have been unable to decompress any block..)
+    {
+        fprintf(stderr,"reached end of file\n");
+        is_final_block = true;
+        return false;
+    }
 
+    /* BFINAL: 1 bit  */
+    is_final_block = in_stream.pop_bits(1);
+
+    bool ret;
     /* BTYPE: 2 bits  */
     switch(in_stream.pop_bits(2)) {
     case DEFLATE_BLOCKTYPE_DYNAMIC_HUFFMAN:
-        prepare_dynamic(d, in_stream);
+        ret = prepare_dynamic(d, in_stream);
+        if (!ret)
+            return false;
         break;
 
     case DEFLATE_BLOCKTYPE_UNCOMPRESSED:
-        do_uncompressed(in_stream, out);
-        return is_final_block;
+        ret = do_uncompressed(in_stream, out);
+        if (!ret)
+            return false;
         break;
 
     case DEFLATE_BLOCKTYPE_STATIC_HUFFMAN:
-        prepare_static(d);
+        ret = prepare_static(d);
+        if (!ret)
+            return false;
         break;
 
     default:
-        assert(false);
+        return false;
     }
 
     /* Decompressing a Huffman block (either dynamic or static)  */
@@ -1262,10 +1401,26 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                     in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
         }
         in_stream.remove_bits(entry & HUFFDEC_LENGTH_MASK);
+        //PRINT_DEBUG("in_stream position %x\n",in_stream.in_next);
         if (entry & HUFFDEC_LITERAL) {
             /* Literal  */
-            if(unlikely(out.available() == 0)) out.flush();
-            out.push(byte(entry >> HUFFDEC_RESULT_SHIFT));
+
+            bool ret;
+            if(unlikely(out.available() == 0)) 
+            {
+                fprintf(stderr,"flushing now\n");
+                ret = out.flush();
+                if (!ret) // overflowing the window is a sign of a bad block
+                    return false;
+            }
+            
+            ret = out.push(byte(entry >> HUFFDEC_RESULT_SHIFT));
+            if (!ret) // overflowing the window is a sign of a bad block
+            {
+                PRINT_DEBUG("fail, window overflow\n"); 
+                return false;
+            }
+            //fprintf(stderr,"literal: %c\n",byte(entry >> HUFFDEC_RESULT_SHIFT)); // this is indeed the plaintext decoded character, good to know
             continue;
         }
 
@@ -1288,13 +1443,23 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                 if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH))
                 {
                     out.notify_end_block(is_final_block, in_stream);
-                    return is_final_block; // Block done
+                    return true; // Block done
                 } else {
-                        out.flush();
-                        assert(!(length - 1 >= out.available()));
+                        ret = out.flush();
+                        if (!ret)
+                            return false;
+                        if (!(!(length - 1 >= out.available())))
+                        {   
+                            PRINT_DEBUG("fail at (!(length - 1 >= out.available()))\n"); // shouldn't happen tho
+                            return false;
+                        }
                 }
         }
-        assert(length > 0);
+        if (!(length > 0))
+        {
+            PRINT_DEBUG("fail at length>0\n");
+            return false;
+        }
 
         /* Decode the match offset.  */
         entry = d->offset_decode_table[in_stream.bits(OFFSET_TABLEBITS)];
@@ -1315,10 +1480,15 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
 
         /* Copy the match: 'length' bytes at 'out_next - offset' to
          * 'out_next'.  */
-        out.copy_match(length, offset);
+        bool ret = out.copy_match(length, offset);
+        if (!ret)
+        {
+            return false;
+        }
     }
 
-    return is_final_block;
+    out.notify_end_block(is_final_block, in_stream);
+    return true;
 }
 
 // Original API:
@@ -1333,12 +1503,40 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     byte *out_next = out;
     byte * const out_end = out_next + out_nbytes_avail;
-    DeflateWindow out_window(20, out, out_end);
+    DeflateWindow out_window(out, out_end);
+    DeflateWindow backup_out(out, out_end);
+    int offset = 0;
 
-    bool is_final_block;
+    bool is_final_block = false, went_fine = true;
     do {
-        is_final_block = do_block(d, in_stream, out_window);
-    } while(!is_final_block);
+        InputStream backup_in(in_stream);
+        out_window.backup(backup_out);
+        //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
+        went_fine = do_block(d, in_stream, out_window, is_final_block);
+        if (went_fine)
+            went_fine &= out_window.check_buffer_fastq();
+        if (!went_fine)
+        {
+            if (offset > 33000*8)
+            {
+                PRINT_DEBUG("giving up, can't decode this gzipped file even when bruteforcing next block position\n");
+                exit(1);
+            }
+            offset++;
+            PRINT_DEBUG("couldn't decompress that block, increasing offset to %d\n",offset);
+            in_stream = backup_in;
+            in_stream.ensure_bits<1>(); // just to pop the bit later
+            in_stream.remove_bits(1);
+            //PRINT_DEBUG("after bad block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
+            out_window.restore(backup_out);
+            //PRINT_DEBUG("restored after bad block,    out window %x - %x\n", out_window.next, out_window.buffer_end);
+        }
+        else
+        {
+            printf("block decompressed!\n");//, out_window.buffer);
+            offset = 0;
+        }
+    } while((!went_fine) || (went_fine && !is_final_block));
 
     out_window.final_flush();
 
