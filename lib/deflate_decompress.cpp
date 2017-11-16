@@ -56,8 +56,8 @@
 
 #include "libdeflate.h"
 
-//#define PRINT_DEBUG(...) {}
-#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
+#define PRINT_DEBUG(...) {}
+//#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
 
 
 /*
@@ -1038,8 +1038,8 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
 class DeflateWindow {
 public:
     DeflateWindow(byte* target, byte* target_end) :
-        target(target), target_end(target_end),
         has_dummy_32k(true),
+        target(target), target_end(target_end),
         buffer(new byte[1 << window_bits]), buffer_end(buffer + (1 << window_bits)) {
         clear();
     }
@@ -1211,7 +1211,7 @@ public:
             assert(buffer + evict_size == next - keep_size);
 
             //printf("shard of 0x%06lx bytes and %d blocks required 0x%04lx bytes context\n",
-            printf("shard of %6ld bytes and %d blocks required %4ld bytes context\n", // i like decimals
+            fprintf(stderr,"shard of %6ld bytes and %d blocks required %4ld bytes context\n", // i like decimals
                    current_blk - first_blk,
                    blk_count,
                    first_blk - first_ref); // Rayan: i don't understand this first_blk-first_ref
@@ -1240,7 +1240,7 @@ public:
     void final_flush() {
         assert(current_blk == next);
         //printf("shard of 0x%06lx bytes and %d blocks required 0x%04lx bytes context\n",
-        printf("final shard of %6ld bytes and %d blocks required %4ld bytes context\n",
+        fprintf(stderr,"final shard of %6ld bytes and %d blocks required %4ld bytes context\n",
                next - first_blk,
                blk_count,
                first_blk - first_ref);
@@ -1252,22 +1252,25 @@ public:
     void notify_end_block(bool is_final_block, InputStream& in_stream){
         //printf("block size was 0x%06lx %lx %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count);
         
-        printf("block size was %d %ld %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count); // i like my numbers decimals
+        //fprintf(stderr,"block size was %d %ld %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count); // i like my numbers decimals
         current_blk = next;
         blk_count++;
     }
 
     // make sure the buffer contains at least something that looks like fastq
+    // funny story: sometimes a bad buffer may contain many repetitions of the same letter
     bool check_buffer_fastq()
     {
-        int nb_nucl = 0;
-        PRINT_DEBUG("beginning fastq check, bounds %d %d\n",next-(1<<15) - buffer, next - buffer);
+        int nb_A = 0, nb_T = 0, nb_C = 0, nb_G = 0;
+        PRINT_DEBUG("potential good block, beginning fastq check, bounds %d %d\n",next-(1<<15) - buffer, next - buffer);
         for (int  i = next-(1<<15) - buffer;i < next - buffer; i ++)
         {
-            if ( buffer[i] == 'A' || buffer[i] == 'T' || buffer[i] == 'C' || buffer[i] == 'G')
-                nb_nucl++;
+            if ( buffer[i] == 'A') nb_A++;
+            if ( buffer[i] == 'C') nb_C++;
+            if ( buffer[i] == 'T') nb_T++;
+            if ( buffer[i] == 'G') nb_G++;
         }
-        return nb_nucl > 200;
+        return nb_A > 20 && nb_C > 20 && nb_T > 20 && nb_G > 20;
     }
 
     void backup(DeflateWindow &other) {
@@ -1290,11 +1293,11 @@ public:
         blk_count   = other.blk_count;
     }
 
+    bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
 protected:
     byte* target;
     /*const*/ byte* target_end;
 
-    bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     unsigned blk_count; /// Number of decoded blocks currently in the buffer 
     byte* current_blk; /// Start position of the current block in the buffer
     byte* first_blk; /// Start position of the block that is currently first in the buffer
@@ -1336,9 +1339,8 @@ bool do_uncompressed(InputStream& in_stream, DeflateWindow& out) {
         return false;
     }
 
-
-
     out.copy(in_stream, len);
+    return true;
 }
 
 
@@ -1408,6 +1410,11 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
             bool ret;
             if(unlikely(out.available() == 0)) 
             {
+                if (out.has_dummy_32k) // if it's the first block, there is really no reason why buffer should already be full
+                {
+                    PRINT_DEBUG("first block is asking to flush already, probably bad\n");
+                    return false;
+                }
                 fprintf(stderr,"flushing now\n");
                 ret = out.flush();
                 if (!ret) // overflowing the window is a sign of a bad block
@@ -1517,9 +1524,9 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             went_fine &= out_window.check_buffer_fastq();
         if (!went_fine)
         {
-            if (offset > 33000*8)
+            if (offset > 300000*8)
             {
-                PRINT_DEBUG("giving up, can't decode this gzipped file even when bruteforcing next block position\n");
+                fprintf(stderr,"giving up, can't decode this gzipped file even when bruteforcing next %d putative block positions\n", 300000*8);
                 exit(1);
             }
             offset++;
@@ -1533,7 +1540,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         }
         else
         {
-            printf("block decompressed!\n");//, out_window.buffer);
+            fprintf(stderr,"block decompressed!\n");//, out_window.buffer);
             offset = 0;
         }
     } while((!went_fine) || (went_fine && !is_final_block));
