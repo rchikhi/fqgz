@@ -48,6 +48,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <fstream>
 
 #include <stdexcept>
 
@@ -200,6 +201,7 @@ public: //protected:
     bitbuf_t bitbuf; /// Bit buffer
     size_t bitsleft; /// Number of valid bits in the bit buffer
     size_t overrun_count;
+    const byte * begin;
     const byte * /*restrict (FIXME: Rayan had to comment that, in the code that calls do_block)*/ in_next; /// Read pointer
     const byte * /*restrict (same) const*/ in_end; /// Adress of the byte after input
 
@@ -251,7 +253,7 @@ public: //protected:
 
 public:
     InputStream(const byte* in, size_t len) : bitbuf(0), bitsleft(0), overrun_count(0),
-        in_next(in), in_end(in + len)
+        begin(in), in_next(in), in_end(in + len)
     {}
 
     /**
@@ -274,6 +276,11 @@ public:
     inline size_t size() const {
         return in_end - in_next;
     }
+
+    inline size_t position() const {
+        return in_next - begin;
+    }
+
 
     /**
      * Load more bits from the input buffer until the specified number of bits is
@@ -1038,7 +1045,7 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
 class DeflateWindow {
 public:
     DeflateWindow(byte* target, byte* target_end) :
-        has_dummy_32k(true),
+        has_dummy_32k(true), output_to_target(true),
         target(target), target_end(target_end),
         buffer(new byte[1 << window_bits]), buffer_end(buffer + (1 << window_bits)) {
         clear();
@@ -1152,16 +1159,8 @@ public:
                 } while (dst < dst_end);
             }
         }
-/*
-        unsigned char match[length];
-        int i;
-        for (unsigned i =0; i < length; i++)
-        {
-           match[i] = 'x'; //buffer[next-buffer];
-        }
-        match[length]='\0';*/
-        //fprintf(stderr,"match %s length, offset: %s %d %d\n",match,(int)length,(int)offset);
-        //fprintf(stderr,"match %s\n",match);
+
+        //fprintf(stderr,"match length, offset: %d %d\n",(int)length,(int)offset);
         next += length;
         return true;
     }
@@ -1192,7 +1191,7 @@ public:
              * pos 0 [ 
              *   (maybe a dummy 32k context, if it's the first time we flush the buffer)
              *   --------
-             *   some other content that's going to be evicted (a copied to target)
+             *   some other content that's going to be evicted (and copied to target)
              *   --------
              *   content that will be kept (going to be the future context)
              *  ] pos next
@@ -1218,10 +1217,13 @@ public:
 
             if (has_dummy_32k) 
                 evict_size -= (1<<15);
-            assert(target + evict_size < target_end);
-            memcpy(target, buffer + (has_dummy_32k ? (1<<15) : 0), evict_size);
+            if (output_to_target)
+            {
+                assert(target + evict_size < target_end);
+                memcpy(target, buffer + (has_dummy_32k ? (1<<15) : 0), evict_size);
+                target += evict_size;
+            }
             has_dummy_32k = false;
-            target += evict_size;
 
             // Copy the kept section
             assert(buffer + keep_size < next - keep_size);
@@ -1293,10 +1295,20 @@ public:
         blk_count   = other.blk_count;
     }
 
+    /* dump a block to disk. only works in "record" mode, because we make sure the window only contains 1 lock */
+    void dump_block(int i)
+    {
+         std::ofstream block;
+         block.open ("block" + std::to_string(i)+ ".dump");
+         block.write((char *)first_blk, next - first_blk);
+         block.close();
+    }
+
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
+    bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
 protected:
     byte* target;
-    /*const*/ byte* target_end;
+    const byte* target_end;
 
     unsigned blk_count; /// Number of decoded blocks currently in the buffer 
     byte* current_blk; /// Start position of the current block in the buffer
@@ -1504,7 +1516,10 @@ LIBDEFLATEAPI enum libdeflate_result
 libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 			      const byte * restrict const in, size_t in_nbytes,
 			      byte * restrict const out, size_t out_nbytes_avail,
-			      size_t *actual_out_nbytes_ret)
+			      size_t *actual_out_nbytes_ret,
+                  int skip,
+                  signed long long record,
+                  signed long long until)
 {
     InputStream in_stream(in, in_nbytes);
 
@@ -1512,36 +1527,92 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     byte * const out_end = out_next + out_nbytes_avail;
     DeflateWindow out_window(out, out_end);
     DeflateWindow backup_out(out, out_end);
-    int offset = 0;
+    int failed_decomp_counter = 0;
+    signed int recording = -1;
+    signed int until_counter = -1;
+    int skip_counter = 0;
+
+    /* Skipping user-set amount of bytes, after the header of course */
+    if (skip)
+    {
+        in_stream.in_next += skip;
+        out_window.output_to_target = false;
+        skip_counter = 20;
+    }
+
+    /* we will dump some blocks to disk. let's remove existing ones first */
+    for (int i = 0; i < 20; i++)
+        remove( ("block" + std::to_string(i)+ ".dump").c_str() );
 
     bool is_final_block = false, went_fine = true;
     do {
         InputStream backup_in(in_stream);
         out_window.backup(backup_out);
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
+        
         went_fine = do_block(d, in_stream, out_window, is_final_block);
+        went_fine &= out_window.check_buffer_fastq(); // this is a check that the block is indeed FASTQ-looking
+
         if (went_fine)
-            went_fine &= out_window.check_buffer_fastq();
-        if (!went_fine)
         {
-            if (offset > 300000*8)
+            fprintf(stderr,"block decompressed!\n");//, out_window.buffer);
+            failed_decomp_counter = 0; // reset failed block counter 
+        
+            long long position = in_stream.position();
+
+            /* if we need to record blocks to disk, and we have not recorded yet, and it's time to record */
+            if (record > -1 && recording == -1 && position > record)
             {
-                fprintf(stderr,"giving up, can't decode this gzipped file even when bruteforcing next %d putative block positions\n", 300000*8);
+                recording = 20;
+            }
+            if (recording > 0)
+            {
+                out_window.dump_block(20-recording);
+                recording--;
+            }
+            if (record > -1)
+                out_window.flush(); // make sure the window only contains only 1 block
+
+            /* if we need to stop 20 blocks after some point, and that point has been reached, setup a counter */
+            if (until > -1 && until_counter == -1 && position > until)
+                until_counter = 20;
+            if (until_counter > 0) 
+            {
+                until_counter--;
+                if (until_counter == 0)
+                {
+                    fprintf(stderr,"stopping 20 blocks after specified position\n");
+                    break;
+                }
+
+            }
+
+            /* if we're doing random access, don't output to target the first 20 blocks */
+            if (skip_counter > 0)
+            {
+                skip_counter--;
+                if (skip_counter == 0)
+                {
+                    out_window.flush(); // re-initialize the window with just a context and no other block data
+                    out_window.output_to_target = true; // the next block and so on will be output to "out"
+                }
+            }
+        }
+        else
+        {
+            if (failed_decomp_counter > 300000*8)
+            {
+                fprintf(stderr,"giving up, can't random-access this gzipped file even when bruteforcing next %d putative block positions\n", 300000*8);
                 exit(1);
             }
-            offset++;
+            failed_decomp_counter++;
             PRINT_DEBUG("couldn't decompress that block, increasing offset to %d\n",offset);
             in_stream = backup_in;
-            in_stream.ensure_bits<1>(); // just to pop the bit later
+            in_stream.ensure_bits<1>(); // to make sure there is at least one bit to pop
             in_stream.remove_bits(1);
             //PRINT_DEBUG("after bad block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
             out_window.restore(backup_out);
             //PRINT_DEBUG("restored after bad block,    out window %x - %x\n", out_window.next, out_window.buffer_end);
-        }
-        else
-        {
-            fprintf(stderr,"block decompressed!\n");//, out_window.buffer);
-            offset = 0;
         }
     } while((!went_fine) || (went_fine && !is_final_block));
 
