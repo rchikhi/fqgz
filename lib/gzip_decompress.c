@@ -121,15 +121,18 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 
 	in_next = in_end - GZIP_FOOTER_SIZE;
 
+    // Rayan: skipping those checks as we may not be decompressing the whole file
+#if 0
 	/* CRC32 */
-// 	if (libdeflate_crc32(0, out, actual_out_nbytes) !=
-// 	    get_unaligned_le32(in_next))
-// 		return LIBDEFLATE_BAD_DATA;
+ 	if (libdeflate_crc32(0, out, actual_out_nbytes) !=
+ 	    get_unaligned_le32(in_next))
+ 		return LIBDEFLATE_BAD_DATA;
 	in_next += 4;
 
 	/* ISIZE */
 	if ((u32)actual_out_nbytes != get_unaligned_le32(in_next))
 		return LIBDEFLATE_BAD_DATA;
+#endif
 
 	return LIBDEFLATE_SUCCESS;
 }

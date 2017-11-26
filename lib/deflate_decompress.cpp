@@ -1045,8 +1045,8 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
 class DeflateWindow {
 public:
     DeflateWindow(byte* target, byte* target_end) :
-        has_dummy_32k(true), output_to_target(true),
-        target(target), target_end(target_end),
+        has_dummy_32k(true), output_to_target(true), nb_bytes_output(0),
+        target(target), target_end(target_end), 
         buffer(new byte[1 << window_bits]), buffer_end(buffer + (1 << window_bits)) {
         clear();
     }
@@ -1222,11 +1222,12 @@ public:
                 assert(target + evict_size < target_end);
                 memcpy(target, buffer + (has_dummy_32k ? (1<<15) : 0), evict_size);
                 target += evict_size;
+                nb_bytes_output += evict_size;
             }
             has_dummy_32k = false;
 
             // Copy the kept section
-            assert(buffer + keep_size < next - keep_size);
+            assert(buffer + keep_size < next);
             memcpy(buffer, next - keep_size, keep_size);
             next = buffer + keep_size;
 
@@ -1265,14 +1266,26 @@ public:
     {
         int nb_A = 0, nb_T = 0, nb_C = 0, nb_G = 0;
         PRINT_DEBUG("potential good block, beginning fastq check, bounds %d %d\n",next-(1<<15) - buffer, next - buffer);
-        for (int  i = next-(1<<15) - buffer;i < next - buffer; i ++)
+        // check the first 5K, mid 5K, last 5K
+        int check_size = 5000;
+        long int pos[3] = { next-(1<<15) - buffer, next - (1<<14) - buffer, next - check_size - buffer };
+        for (auto start: pos)
         {
-            if ( buffer[i] == 'A') nb_A++;
-            if ( buffer[i] == 'C') nb_C++;
-            if ( buffer[i] == 'T') nb_T++;
-            if ( buffer[i] == 'G') nb_G++;
+            for (int  i = start ;i < start + check_size; i ++)
+            {
+                switch ( buffer[i])
+                {
+                    case 'A': nb_A++; break;  
+                    case 'C': nb_C++; break;  
+                    case 'T': nb_T++; break;  
+                    case 'G': nb_G++; break;  
+                    default: break;
+                }
+            }
+            if (!(nb_A > 20 && nb_C > 20 && nb_T > 20 && nb_G > 20 && (nb_A+nb_C+nb_T+nb_G > check_size/10))) /* some 10K block will have 20 A's,C's,T's,G's, but just not enough */
+                    return false;
         }
-        return nb_A > 20 && nb_C > 20 && nb_T > 20 && nb_G > 20;
+        return true;
     }
 
     void backup(DeflateWindow &other) {
@@ -1281,8 +1294,6 @@ public:
         other.first_blk   = other.buffer + (first_blk-buffer);
         other.first_ref   = other.buffer + (first_ref-buffer);
         other.current_blk = other.buffer + (current_blk-buffer);
-/*        other.target      = target; // shouldn't need to save/restore target, because failed blocks actually _shouldn't_ touch target
-        other.target_end  = target_end;*/
         other.blk_count   = blk_count;
     }
 
@@ -1299,13 +1310,14 @@ public:
     void dump_block(int i)
     {
          std::ofstream block;
-         block.open ("block" + std::to_string(i)+ ".dump");
+         block.open ("/tmp/block" + std::to_string(i)+ ".dump");
          block.write((char *)first_blk, next - first_blk);
          block.close();
     }
 
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
+    int nb_bytes_output;
 protected:
     byte* target;
     const byte* target_end;
@@ -1531,18 +1543,19 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     signed int recording = -1;
     signed int until_counter = -1;
     int skip_counter = 0;
+    int nb_to_record = 2000;
 
     /* Skipping user-set amount of bytes, after the header of course */
     if (skip)
     {
-        in_stream.in_next += skip;
+        in_stream.in_next += skip; // TODO: will probably not be valid when input is a stream
         out_window.output_to_target = false;
         skip_counter = 20;
     }
 
     /* we will dump some blocks to disk. let's remove existing ones first */
-    for (int i = 0; i < 20; i++)
-        remove( ("block" + std::to_string(i)+ ".dump").c_str() );
+    for (int i = 0; i < nb_to_record; i++)
+        remove( ("/tmp/block" + std::to_string(i)+ ".dump").c_str() );
 
     bool is_final_block = false, went_fine = true;
     do {
@@ -1563,11 +1576,12 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             /* if we need to record blocks to disk, and we have not recorded yet, and it's time to record */
             if (record > -1 && recording == -1 && position > record)
             {
-                recording = 20;
+                recording = nb_to_record;
+                fprintf(stderr,"recording %d blocks after compressed position %lld\n",recording, position);
             }
             if (recording > 0)
             {
-                out_window.dump_block(20-recording);
+                out_window.dump_block(nb_to_record-recording);
                 recording--;
             }
             if (record > -1)
@@ -1617,6 +1631,9 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     } while((!went_fine) || (went_fine && !is_final_block));
 
     out_window.final_flush();
+
+    *actual_out_nbytes_ret = out_window.nb_bytes_output; // tell how many bytes we actually output 
+
 
     return LIBDEFLATE_SUCCESS;
 }
