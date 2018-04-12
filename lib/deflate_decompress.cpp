@@ -1047,7 +1047,10 @@ public:
     DeflateWindow(byte* target, byte* target_end) :
         has_dummy_32k(true), output_to_target(true), nb_bytes_output(0),
         target(target), target_end(target_end), 
-        buffer(new byte[1 << window_bits]), buffer_end(buffer + (1 << window_bits)) {
+        buffer(new byte[1 << window_bits]), 
+        buffer_counts(new uint32_t[1 << window_bits]),
+        buffer_end(buffer + (1 << window_bits))
+    {
         clear();
     }
 
@@ -1057,8 +1060,11 @@ public:
 
     void clear() {
         for (int i = 0; i < (1<<15); i ++)
+        {
             buffer[i] = '?';
-        next = buffer+(1<<15); // this is for decompression at the middle of the file: the very first buffer will have a 32k context that consists of '?'s
+            buffer_counts[i] = 0;
+        }
+        next = buffer+(1<<15); // this is for decompression at the middle of the file: the very first buffer will have a 32k dummy context that consists of '?'s
 
         blk_count = 0;
         current_blk = next;
@@ -1078,13 +1084,14 @@ public:
             PRINT_DEBUG("window buffer overflow: %d/%d",size(),1<<window_bits);
             return false;
         }
+        buffer_counts[next-buffer] = 0;
         *next++ = c;
         return true;
     }
 
     /* return true if it's a reasonable offset, otherwise false */
-    bool copy_match(unsigned length, unsigned offset) {
-        //fprintf(stderr,"want to copy match of length %d, offset %d (window size %d)\n",(int)length,(int)offset, size());
+    bool copy_match(unsigned length, unsigned offset, bool debug) {
+        //if (debug) fprintf(stderr,"want to copy match of length %d, offset %d (window size %d)\n",(int)length,(int)offset, size());
         /* The match source must not begin before the beginning of the
          * output buffer.  */
         if (!(offset <= size()))
@@ -1103,6 +1110,7 @@ public:
             return false;
         }
 
+        // update first_ref for our records
         if(unlikely(first_ref > next - offset)) {
             first_ref = next - offset;
         }
@@ -1164,6 +1172,13 @@ public:
         next += length;
         return true;
     }
+    
+    // record into a dedicated buffer that store counts of back references
+    void record_match(unsigned length, unsigned offset) {
+        const byte *src = next - offset;
+        for (unsigned int i = 0; i < length; i++)
+            buffer_counts[next+i-buffer] = ++buffer_counts[src-buffer+i];
+    }
 
     void copy(InputStream & in, unsigned length) {
         assert(available() >= length);
@@ -1171,11 +1186,48 @@ public:
         next += length;
     }
 
-    //FIXME: debug only
+    // debug only
     unsigned dump(byte* const dst) {
         memcpy(dst, buffer, size());
         return next - buffer;
     }
+
+    void pretty_print()
+    {
+       const char*  KNRM = "\x1B[0m";
+      const char*  KRED = "\x1B[31m";
+      const char*  KGRN = "\x1B[32m";
+      const char*  KYEL = "\x1B[33m";/*
+      const char*  KBLU = "\x1B[34m";
+      const char*  KMAG = "\x1B[35m";
+      const char*  KCYN = "\x1B[36m";
+      const char*  KWHT = "\x1B[37m";*/
+        fprintf(stderr, "%s about to print a window %s\n", KRED, KNRM);
+        unsigned int length = size();
+        for (unsigned int i = 0; i < length; i++)
+        {
+            char const *color;
+            if (buffer_counts[i] < 10)
+                color = KNRM;
+            else
+            {
+                if (buffer_counts[i] < 100)
+                   color = KGRN;
+                else
+                {
+                    if (buffer_counts[i] < 1000)
+                       color = KYEL;
+                    else
+                       color = KRED;
+                }
+            }
+            if (buffer[i] == '\n')
+                fprintf(stderr,"%s\\n%c%s",color,buffer[i],KNRM);
+            else
+                fprintf(stderr,"%s%c%s",color,buffer[i],KNRM);
+        }
+    }
+
 
     /* called when the window is full.
      * note: not necessarily at the end of a block */ 
@@ -1229,6 +1281,12 @@ public:
             // Copy the kept section
             assert(buffer + keep_size < next);
             memcpy(buffer, next - keep_size, keep_size);
+            // update counts
+            for (unsigned int i = 0; i < keep_size; i ++)
+                buffer_counts[i] = buffer_counts[next-keep_size+i-buffer];
+            for (unsigned int i = keep_size; i < (1 << window_bits); i ++)
+                buffer_counts[i] = 0;
+            // update next pointer
             next = buffer + keep_size;
 
             blk_count = 0;
@@ -1253,18 +1311,21 @@ public:
     }
 
     void notify_end_block(bool is_final_block, InputStream& in_stream){
-        //printf("block size was 0x%06lx %lx %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count);
-        
-        //fprintf(stderr,"block size was %d %ld %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count); // i like my numbers decimals
+        //printf(        "block size was 0x%06lx %lx %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count);
+        //fprintf(stderr,"block size was %d %ld %lu\n",       next-current_blk, in_stream.bitsleft, in_stream.overrun_count); // i like my numbers decimals
         current_blk = next;
         blk_count++;
     }
 
     // make sure the buffer contains at least something that looks like fastq
     // funny story: sometimes a bad buffer may contain many repetitions of the same letter
-    bool check_buffer_fastq()
+    // anyhow, this function could be vastly improved by penalizing non-ACTG chars
+    bool check_buffer_fastq(bool previously_aligned)
     {
-        int nb_A = 0, nb_T = 0, nb_C = 0, nb_G = 0;
+        if (next - buffer < (1<<15))
+            return true; // block too small, nothing to do
+
+        int nb_A = 0, nb_T = 0, nb_C = 0, nb_G = 0, nb_N = 0;
         PRINT_DEBUG("potential good block, beginning fastq check, bounds %d %d\n",next-(1<<15) - buffer, next - buffer);
         // check the first 5K, mid 5K, last 5K
         int check_size = 5000;
@@ -1279,13 +1340,34 @@ public:
                     case 'C': nb_C++; break;  
                     case 'T': nb_T++; break;  
                     case 'G': nb_G++; break;  
+                    case 'N': nb_N++; break;  
                     default: break;
                 }
             }
-            if (!(nb_A > 20 && nb_C > 20 && nb_T > 20 && nb_G > 20 && (nb_A+nb_C+nb_T+nb_G > check_size/10))) /* some 10K block will have 20 A's,C's,T's,G's, but just not enough */
-                    return false;
+            if (!(nb_A > 20 && nb_C > 20 && nb_T > 20 && nb_G > 20 && (nb_N+nb_A+nb_C+nb_T+nb_G > check_size/10))) /* some 10K block will have 20 A's,C's,T's,G's, but just not enough */
+            {
+                if (previously_aligned)
+                {
+                    fprintf(stderr,"bad block after we thought we had a good block. let's review it:\n");
+                    for (int  i = 0;i < (1<<15); i ++)
+                        fprintf(stderr,"%c",buffer[next-(1<<15)+i-buffer]);
+
+
+                }
+                return false;
+            }
         }
         return true;
+    }
+    
+    // decide if the buffer contains all the fastq sequences with no ambiguities in them
+    bool check_fully_reconstructed_sequences()
+    {
+        // this is my major TODO (rayan).
+        bool res = true;
+        pretty_print();
+        fprintf(stderr,"check_fully_reconstructed status: %s \n", res?"fully reconstructed":"incomplete");
+        return res; // for now i don't know how to implement this reliably, so for now it returns incomplete windows
     }
 
     void backup(DeflateWindow &other) {
@@ -1306,7 +1388,7 @@ public:
         blk_count   = other.blk_count;
     }
 
-    /* dump a block to disk. only works in "record" mode, because we make sure the window only contains 1 lock */
+    /* dump a block to disk. only works in "record" mode, because we make sure the window only contains 1 block */
     void dump_block(int i)
     {
          std::ofstream block;
@@ -1329,6 +1411,7 @@ protected:
 
 
     byte /* const (FIXME, Rayan: same as InputStream*/ *buffer; /// Allocated output buffer  
+    uint32_t /* const (FIXME, Rayan: same as InputStream*/ *buffer_counts; /// Allocated counts for keeping track of how many back references in the buffer
     /*const*/ byte* /*const FIXME: Rayan, same as InputStream*/ buffer_end; /// Past the end pointer
     byte* next; /// Next byte to be written
 };
@@ -1371,8 +1454,10 @@ bool do_uncompressed(InputStream& in_stream, DeflateWindow& out) {
 
 
 /* return true if block decompression went smoothly, false if not (probably due to corrupt data) */
-bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, DeflateWindow& out, bool &is_final_block)
+bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, DeflateWindow& out, bool &is_final_block, bool aligned)
 {
+    bool debug = aligned;
+
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
 
@@ -1492,6 +1577,8 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
             return false;
         }
 
+        // if we end up here, it means we're at a match
+
         /* Decode the match offset.  */
         entry = d->offset_decode_table[in_stream.bits(OFFSET_TABLEBITS)];
         if (entry & HUFFDEC_SUBTABLE_POINTER) {
@@ -1509,9 +1596,11 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         const u32 offset = (entry & HUFFDEC_OFFSET_BASE_MASK) +
                  in_stream.pop_bits(entry >> HUFFDEC_EXTRA_OFFSET_BITS_SHIFT);
 
+        
         /* Copy the match: 'length' bytes at 'out_next - offset' to
          * 'out_next'.  */
-        bool ret = out.copy_match(length, offset);
+        out.record_match(length, offset);
+        bool ret = out.copy_match(length, offset, debug);
         if (!ret)
         {
             return false;
@@ -1520,6 +1609,56 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
 
     out.notify_end_block(is_final_block, in_stream);
     return true;
+}
+
+/* if we need to record blocks to disk, and we have not recorded yet, and it's time to record */
+void handle_recording(signed long long record, signed int &recording, long long position, DeflateWindow &out_window, int nb_to_record)
+{
+    if (record > -1 && recording == -1 && position > record)
+    {
+        recording = nb_to_record;
+        fprintf(stderr,"recording %d blocks after compressed position %lld\n",recording, position);
+    }
+    if (recording > 0)
+    {
+        out_window.dump_block(nb_to_record-recording);
+        recording--;
+    }
+    if (record > -1)
+        out_window.flush(); // make sure the window only contains only 1 block
+}
+
+/* if we need to stop 20 blocks after some point, and that point has been reached, setup a counter */
+bool handle_until(signed long long until, signed int &until_counter, long long position)
+{
+    if (until > -1 && until_counter == -1 && position > until)
+        until_counter = 20;
+    if (until_counter > 0) 
+    {
+        until_counter--;
+        if (until_counter == 0)
+        {
+            fprintf(stderr,"stopping 20 blocks after specified position\n");
+            return true;
+        }
+
+    }
+    return false;
+}
+
+/* if we're doing random access:
+ * - don't output to target the first 20 blocks for sure
+ * - start outputting to target when we are sure that the buffer window contains fully resolved sequences
+ */
+void handle_skip(int &skip_counter,  DeflateWindow &out_window)
+{
+    if (skip_counter > 0)
+        skip_counter--;
+    if (skip_counter == 0 && out_window.check_fully_reconstructed_sequences())
+    {
+        out_window.flush(); // re-initialize the window with just a context and no other block data
+        out_window.output_to_target = true; // the next block and so on will be output to "out"
+    }
 }
 
 // Original API:
@@ -1553,67 +1692,47 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         skip_counter = 20;
     }
 
-    /* we will dump some blocks to disk. let's remove existing ones first */
+    /* we will dump some blocks to disk. but first, remove existing ones */
     for (int i = 0; i < nb_to_record; i++)
         remove( ("/tmp/block" + std::to_string(i)+ ".dump").c_str() );
 
-    bool is_final_block = false, went_fine = true;
+    bool is_final_block = false, aligned = false;
+
     do {
         InputStream backup_in(in_stream);
         out_window.backup(backup_out);
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
         
-        went_fine = do_block(d, in_stream, out_window, is_final_block);
-        went_fine &= out_window.check_buffer_fastq(); // this is a check that the block is indeed FASTQ-looking
+        bool went_fine = false;
+
+        went_fine = do_block(d, in_stream, out_window, is_final_block, aligned);
+
+        went_fine &= out_window.check_buffer_fastq(aligned); // this is a check that the block is indeed FASTQ-looking
+
 
         if (went_fine)
         {
+            aligned = true; // found a way to fully decompress a block, seems that we're good
+
             fprintf(stderr,"block decompressed!\n");//, out_window.buffer);
             failed_decomp_counter = 0; // reset failed block counter 
         
             long long position = in_stream.position();
 
-            /* if we need to record blocks to disk, and we have not recorded yet, and it's time to record */
-            if (record > -1 && recording == -1 && position > record)
-            {
-                recording = nb_to_record;
-                fprintf(stderr,"recording %d blocks after compressed position %lld\n",recording, position);
-            }
-            if (recording > 0)
-            {
-                out_window.dump_block(nb_to_record-recording);
-                recording--;
-            }
-            if (record > -1)
-                out_window.flush(); // make sure the window only contains only 1 block
+            handle_recording(record, recording, position, out_window, nb_to_record);
+            if (handle_until(until, until_counter, position))
+                break;
+            handle_skip(skip_counter, out_window);
 
-            /* if we need to stop 20 blocks after some point, and that point has been reached, setup a counter */
-            if (until > -1 && until_counter == -1 && position > until)
-                until_counter = 20;
-            if (until_counter > 0) 
-            {
-                until_counter--;
-                if (until_counter == 0)
-                {
-                    fprintf(stderr,"stopping 20 blocks after specified position\n");
-                    break;
-                }
-
-            }
-
-            /* if we're doing random access, don't output to target the first 20 blocks */
-            if (skip_counter > 0)
-            {
-                skip_counter--;
-                if (skip_counter == 0)
-                {
-                    out_window.flush(); // re-initialize the window with just a context and no other block data
-                    out_window.output_to_target = true; // the next block and so on will be output to "out"
-                }
-            }
         }
         else
         {
+            if (aligned)
+            {
+                fprintf(stderr,"unexpected error, bad block after we thought we had found a correct one\n");
+                // we're not ready to support that case, as the buffer at this point contains something else than an empty context
+                exit(1);
+            }
             if (failed_decomp_counter > 300000*8)
             {
                 fprintf(stderr,"giving up, can't random-access this gzipped file even when bruteforcing next %d putative block positions\n", 300000*8);
@@ -1628,7 +1747,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             out_window.restore(backup_out);
             //PRINT_DEBUG("restored after bad block,    out window %x - %x\n", out_window.next, out_window.buffer_end);
         }
-    } while((!went_fine) || (went_fine && !is_final_block));
+    } while((!aligned) || (aligned && !is_final_block));
 
     out_window.final_flush();
 

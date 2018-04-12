@@ -1,3 +1,5 @@
+set -o xtrace
+
 TESTFILE_ORIGIN_PATH=${1:-/usr/bin/inkscape}
 TEST_DIR="/tmp"
 
