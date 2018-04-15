@@ -1389,7 +1389,8 @@ public:
                 current_sequence += c;
             else
             {
-                if (((c == '\r' || c == '\n') || (buffer_counts[i] > 1000)) && (current_sequence.size() > 30)) // heuristics here, assume reads at > 30 bp
+                if ((c == '\r' || c == '\n' || c == '?')  //(buffer_counts[i] > 1000))  // actually not a good heursitic
+                        && (current_sequence.size() > 30)) // heuristics here, assume reads at > 30 bp
                 {
                     putative_sequences.push_back(current_sequence);
                     // note this code may capture stretches of quality values too
