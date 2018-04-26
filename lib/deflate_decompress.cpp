@@ -61,6 +61,8 @@
 
 #define PRINT_DEBUG(...) {}
 //#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
+#define DEBUG_FIRST_BLOCK(x) {}
+//#define DEBUG_FIRST_BLOCK(x) {x}
 
 
 /*
@@ -1049,6 +1051,7 @@ public:
     DeflateWindow(byte* target, byte* target_end) :
         has_dummy_32k(true), output_to_target(true), nb_bytes_output(0),
         fully_reconstructed(false),
+        nb_back_refs_in_block(0), len_back_refs_in_block(0),
         target(target), target_end(target_end), 
         buffer(new byte[1 << window_bits]), 
         buffer_counts(new uint32_t[1 << window_bits]),
@@ -1082,6 +1085,8 @@ public:
     { return buffer_end - next; }
 
     bool push(byte c) {
+        DEBUG_FIRST_BLOCK(if (c >' ' && c<'}') fprintf(stderr,"literal %c\n",c);)
+
         if (!(next < buffer_end))
         {
             PRINT_DEBUG("window buffer overflow: %d/%d",size(),1<<window_bits);
@@ -1171,16 +1176,24 @@ public:
             }
         }
 
-        //fprintf(stderr,"match length, offset: %d %d\n",(int)length,(int)offset);
+        DEBUG_FIRST_BLOCK(fprintf(stderr,"match of length %d offset %d: ",length,offset);)
+        DEBUG_FIRST_BLOCK( for (unsigned int i = 0; i < length; i++) fprintf(stderr,"%c",buffer[next+i-buffer]); fprintf(stderr,"\n");)
+           
         next += length;
+
+        nb_back_refs_in_block++;
+        len_back_refs_in_block += length;
         return true;
     }
     
     // record into a dedicated buffer that store counts of back references
     void record_match(unsigned length, unsigned offset) {
+
         const byte *src = next - offset;
         for (unsigned int i = 0; i < length; i++)
+        {
             buffer_counts[next+i-buffer] = ++buffer_counts[src-buffer+i];
+        }
     }
 
     void copy(InputStream & in, unsigned length) {
@@ -1317,10 +1330,11 @@ public:
     }
 
     void notify_end_block(bool is_final_block, InputStream& in_stream){
-        //printf(        "block size was 0x%06lx %lx %lu\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count);
-        //fprintf(stderr,"block size was %d %ld %lu\n",       next-current_blk, in_stream.bitsleft, in_stream.overrun_count); // i like my numbers decimals
+        PRINT_DEBUG(fprintf(stderr,"block size was %ld bits left %ld overrun_count %lu nb back refs %u tot/average len %u/%.1f\n", next-current_blk, in_stream.bitsleft, in_stream.overrun_count, nb_back_refs_in_block, len_back_refs_in_block, 1.0*len_back_refs_in_block/nb_back_refs_in_block);)
         current_blk = next;
         blk_count++;
+        nb_back_refs_in_block = 0;
+        len_back_refs_in_block = 0;
     }
 
     // make sure the buffer contains at least something that looks like fastq
@@ -1328,9 +1342,6 @@ public:
     // anyhow, this function could be vastly improved by penalizing non-ACTG chars
     bool check_buffer_fastq(bool previously_aligned)
     {
-        if (next - buffer < (1<<15))
-            return false; // block too small, nothing to do
-
         int nb_A = 0, nb_T = 0, nb_C = 0, nb_G = 0, nb_N = 0;
         PRINT_DEBUG("potential good block, beginning fastq check, bounds %d %d\n",next-(1<<15) - buffer, next - buffer);
         // check the first 5K, mid 5K, last 5K
@@ -1371,8 +1382,9 @@ public:
     {
         if (next - buffer < (1<<15))
         {
-            fprintf(stderr,"not enough context to check context. should that happen?\n");
-            return; // block too small, nothing to do
+            fprintf(stderr,"not enough context to check context. should that happen?\n"); // i don't think so but worth checking
+            exit(1);
+            return;
         }
 
         // when this function is called, we're at the start of a block, so here's the context start
@@ -1462,10 +1474,12 @@ public:
             fprintf(stderr,"\n");
         }
         fully_reconstructed = res;
+        DEBUG_FIRST_BLOCK(exit(1);)
     }
 
     void backup(DeflateWindow &other) {
         memcpy(other.buffer, buffer, size());
+        memcpy(other.buffer_counts, buffer_counts, size()*sizeof(uint32_t));
         other.next        = other.buffer + (next-buffer);
         other.first_blk   = other.buffer + (first_blk-buffer);
         other.first_ref   = other.buffer + (first_ref-buffer);
@@ -1474,7 +1488,8 @@ public:
     }
 
     void restore(DeflateWindow &other) {
-        memcpy(buffer, other.buffer, other.size());
+        memcpy(buffer,        other.buffer,        other.size());
+        memcpy(buffer_counts, other.buffer_counts, other.size()*sizeof(uint32_t));
         next        = buffer + (other.next-other.buffer);
         first_blk   = buffer + (other.first_blk-other.buffer);
         first_ref   = buffer + (other.first_ref-other.buffer);
@@ -1495,6 +1510,11 @@ public:
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
     int nb_bytes_output;
     bool fully_reconstructed; // flag to say whether context is fully reconstructed (heuristic)
+
+    // some back-references statistics
+    unsigned nb_back_refs_in_block;
+    unsigned len_back_refs_in_block;
+
 protected:
     byte* target;
     const byte* target_end;
@@ -1592,6 +1612,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
     }
 
     /* Decompressing a Huffman block (either dynamic or static)  */
+    DEBUG_FIRST_BLOCK(fprintf(stderr,"trying to decode huffman block\n");)
 
     /* The main DEFLATE decode loop  */
     for (;;) {
@@ -1623,6 +1644,13 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                 ret = out.flush();
                 if (!ret) // overflowing the window is a sign of a bad block
                     return false;
+            }
+
+            // Mael's trick: fastq should contain only ASCII codes
+            if (byte(entry >> HUFFDEC_RESULT_SHIFT) > 127) 
+            {
+                PRINT_DEBUG("fail, unprintable literal unexpected in fastq\n"); 
+                return false;
             }
             
             ret = out.push(byte(entry >> HUFFDEC_RESULT_SHIFT));
@@ -1782,14 +1810,14 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     signed int recording = -1;
     signed int until_counter = -1;
     int skip_counter = 0;
-    int nb_to_record = 100;
+    int nb_to_record = 10;
 
     /* Skipping user-set amount of bytes, after the header of course */
     if (skip)
     {
         in_stream.in_next += skip; // TODO: will probably not be valid when input is a stream
         out_window.output_to_target = false;
-        skip_counter = 20;
+        skip_counter = 0; //20; // skip 20 blocks before checking for valid fastq // FIXME
     }
 
     /* we will dump some blocks to disk. but first, remove existing ones */
@@ -1807,11 +1835,11 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
         went_fine = do_block(d, in_stream, out_window, is_final_block, aligned);
 
-        went_fine &= out_window.check_buffer_fastq(aligned); // this is a check that the block is indeed FASTQ-looking
-
-
         if (went_fine)
-        {
+            went_fine &= out_window.check_buffer_fastq(aligned); // this is a check that the block is indeed FASTQ-looking
+        
+        if (went_fine)
+        {  
             decoded_blocks++;
             aligned = true; // found a way to fully decompress a block, seems that we're good
 
@@ -1846,13 +1874,13 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                 exit(1);
             }
             failed_decomp_counter++;
-            PRINT_DEBUG("couldn't decompress that block, increasing offset to %d\n",offset);
+            PRINT_DEBUG("couldn't decompress that block, increasing fail count to %d\n",failed_decomp_counter);
             in_stream = backup_in;
             in_stream.ensure_bits<1>(); // to make sure there is at least one bit to pop
             in_stream.remove_bits(1);
-            //PRINT_DEBUG("after bad block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
             out_window.restore(backup_out);
-            //PRINT_DEBUG("restored after bad block,    out window %x - %x\n", out_window.next, out_window.buffer_end);
+            //PRINT_DEBUG("restored after bad block,    out window %x - %x\n", out_window.next, out_window.buffer_end); // next is now protected
+            PRINT_DEBUG("restored after bad block\n");
         }
     } while((!aligned) || (aligned && !is_final_block));
 
