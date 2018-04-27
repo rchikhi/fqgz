@@ -1479,7 +1479,7 @@ public:
             if (buffer[i] == '\n')
                 fprintf(stderr,"%s\\n%c%s",color,buffer[i],KNRM);
             else {
-                if(backref_origins[i] > 0) {
+                if(backref_origins[i] > 0) { // Live reference to the unknown initial context window
                     assert(buffer[i]== byte('?'));
 
                     // Compute the monotone span of backreferences to the unknown primary window
@@ -1491,8 +1491,20 @@ public:
                     } while(i < length && backref_origins[i] == end);
                     i--; // Backtrack to last correct position
 
-                    if(start-end == 1) {
-                        fprintf(stderr,"%s[%d]%s",color,start ,KNRM);
+                    if(start-end == 1) { // No monotone span found (singleton)
+                        // It might be a repeated singleton backref (common)
+                        unsigned count = 0;
+                        do { // Lookahead
+                            count++;
+                            i++;
+                        } while(i < length && backref_origins[i] == start);
+                        i--; // Backtrack to last correct position
+
+                        if(count > 1) {
+                            fprintf(stderr,"%s[%dx%d]%s",color,start, count,KNRM);
+                        } else {
+                            fprintf(stderr,"%s[%d]%s",color,start ,KNRM);
+                        }
                     } else {
                         fprintf(stderr,"%s[%d,%d]%s",color,start, start-end ,KNRM);
                     }
