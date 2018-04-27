@@ -173,7 +173,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 		goto out;
 	}
 
-	ret = full_write(out, uncompressed_data, actual_uncompressed_size);
+	//ret = full_write(out, uncompressed_data, actual_uncompressed_size);
 out:
 	delete uncompressed_data;
 	return ret;

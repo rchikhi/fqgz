@@ -1414,7 +1414,7 @@ public:
             }
         }
 
-        pretty_print();
+        //pretty_print();
         fprintf(stderr,"check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (res)
             fprintf(stderr,"fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
