@@ -1477,17 +1477,17 @@ public:
     /* called when the window is full.
      * note: not necessarily at the end of a block */
     void flush() {
-        size_t start = has_dummy_32k ? 1UL<<15 : 0;
         constexpr size_t window_size = 1UL<<15;
 
+        // update counts
+        memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
+
         if(output_to_target) {
+            size_t start = has_dummy_32k ? 1UL<<15 : 0;
             FlushableDeflateWindow::flush(start);
         } else {
            DeflateWindow::flush(); // Only move the context to the begining
         }
-
-        // update counts
-        memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
 
         has_dummy_32k = false;
     }
