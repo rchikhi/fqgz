@@ -1215,7 +1215,7 @@ public:
     }
 
     void clear() {
-        DeflateWindow::clear();
+        Base::clear();
 
         has_dummy_32k = true;
         for (int i = 0; i < (1<<15); i ++)
@@ -1273,22 +1273,20 @@ public:
     void push(byte c) {
         DEBUG_FIRST_BLOCK(if (c >' ' && c<'}') fprintf(stderr,"literal %c\n",c);)
         buffer_counts[next-buffer] = 0;
-        DeflateWindow::push(c);
+        Base::push(c);
     }
 
     void copy_match(unsigned length, unsigned offset) {
-        if(has_dummy_32k && offset > size()) {
-            uint32_t* counts = buffer_counts + size();
-            while(offset > size() && length > 0) {
-                *next++ = byte('?');
-                *counts++ = 1;
-                length--;
-            }
-            if(length == 0)
-                return;
-        }
-        DeflateWindow::copy_match(length, offset);
+        Base::copy_match(length, offset);
         record_match(length, offset);
+    }
+
+    void copy(InputStream & in, unsigned length) {
+        size_t start = size();
+        for(size_t i=start ; i < start + length ; i++) {
+            buffer_counts[i]=0;
+        }
+        Base::copy(in, length);
     }
 
     // make sure the buffer contains at least something that looks like fastq
