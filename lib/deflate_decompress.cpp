@@ -1277,8 +1277,8 @@ public:
     }
 
     void copy_match(unsigned length, unsigned offset) {
-        Base::copy_match(length, offset);
         record_match(length, offset);
+        Base::copy_match(length, offset);
     }
 
     void copy(InputStream & in, unsigned length) {
