@@ -1209,7 +1209,8 @@ public:
         has_dummy_32k(true), output_to_target(true),
         fully_reconstructed(false),
         nb_back_refs_in_block(0), len_back_refs_in_block(0),
-        buffer_counts(new uint32_t[1 << output_buffer_bits])
+        buffer_counts(new uint32_t[1 << output_buffer_bits]),
+        backref_origins(new uint16_t[1 << output_buffer_bits])
     {
         clear();
     }
@@ -1222,6 +1223,7 @@ public:
         {
             buffer[i] = '?';
             buffer_counts[i] = 0;
+            backref_origins[i] = (1<<15) - i;
         }
         next = buffer+(1<<15);
     }
@@ -1230,19 +1232,24 @@ public:
         //TODO: could we only copy the 32K ?
         memcpy(other.buffer, buffer, size());
         memcpy(other.buffer_counts, buffer_counts, size()*sizeof(uint32_t));
+        memcpy(other.backref_origins, backref_origins, size()*sizeof(uint16_t));
         other.next        = other.buffer + size();
     }
 
     void restore(InstrDeflateWindow &other) {
         memcpy(buffer, other.buffer, other.size());
         memcpy(buffer_counts, other.buffer_counts, other.size()*sizeof(uint32_t));
+        memcpy(backref_origins, other.backref_origins, other.size()*sizeof(uint16_t));
         next        = buffer + other.size();
     }
 
     // record into a dedicated buffer that store counts of back references
     void record_match(unsigned length, unsigned offset) {
-        for (unsigned int i = 0; i < length; i++)
-            buffer_counts[size()+i] = ++buffer_counts[size()+i - offset];
+        size_t start = size() - offset;
+        for (unsigned int i = 0; i < length; i++) {
+            buffer_counts[size()+i] = ++buffer_counts[start+i];
+            backref_origins[size()+i] = backref_origins[start+i];
+        }
 
         nb_back_refs_in_block++;
         len_back_refs_in_block += length;
@@ -1272,7 +1279,8 @@ public:
 
     void push(byte c) {
         DEBUG_FIRST_BLOCK(if (c >' ' && c<'}') fprintf(stderr,"literal %c\n",c);)
-        buffer_counts[next-buffer] = 0;
+        buffer_counts[size()] = 0;
+        backref_origins[size()] = 0;
         Base::push(c);
     }
 
@@ -1285,6 +1293,7 @@ public:
         size_t start = size();
         for(size_t i=start ; i < start + length ; i++) {
             buffer_counts[i]=0;
+            backref_origins[i]=0;
         }
         Base::copy(in, length);
     }
@@ -1412,7 +1421,7 @@ public:
             }
         }
 
-        //pretty_print();
+        pretty_print();
         fprintf(stderr,"check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (res)
             fprintf(stderr,"fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
@@ -1469,8 +1478,28 @@ public:
             }
             if (buffer[i] == '\n')
                 fprintf(stderr,"%s\\n%c%s",color,buffer[i],KNRM);
-            else
-                fprintf(stderr,"%s%c%s",color,buffer[i],KNRM);
+            else {
+                if(backref_origins[i] > 0) {
+                    assert(buffer[i]== byte('?'));
+
+                    // Compute the monotone span of backreferences to the unknown primary window
+                    uint16_t start = backref_origins[i]; // First offset
+                    uint16_t end = start;
+                    do { // Lookahead
+                        i++;
+                        end--;
+                    } while(i < length && backref_origins[i] == end);
+                    i--; // Backtrack to last correct position
+
+                    if(start-end == 1) {
+                        fprintf(stderr,"%s[%d]%s",color,start ,KNRM);
+                    } else {
+                        fprintf(stderr,"%s[%d,%d]%s",color,start, start-end ,KNRM);
+                    }
+                } else {
+                    fprintf(stderr,"%s%c%s",color,buffer[i],KNRM);
+                }
+            }
         }
     }
 
@@ -1481,6 +1510,7 @@ public:
 
         // update counts
         memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
+        memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
 
         if(output_to_target) {
             size_t start = has_dummy_32k ? 1UL<<15 : 0;
@@ -1513,6 +1543,9 @@ public:
     unsigned len_back_refs_in_block;
 
     uint32_t /* const (FIXME, Rayan: same as InputStream*/ *buffer_counts; /// Allocated counts for keeping track of how many back references in the buffer
+    // Offsets in the primary unknown context window
+    // initially backref_origins[1<<15 - 1]=1, backref_origins[1<<15 - 2]=2, etc
+    uint16_t* backref_origins;
 };
 
 
