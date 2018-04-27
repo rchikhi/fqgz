@@ -1197,10 +1197,6 @@ public:
             buffer_counts[i] = 0;
         }
         next = buffer+(1<<15);
-
-        blk_count = 0;
-        current_blk = next;
-        first_blk = next;
     }
 
     void backup(InstrDeflateWindow &other) {
@@ -1208,17 +1204,12 @@ public:
         memcpy(other.buffer, buffer, size());
         memcpy(other.buffer_counts, buffer_counts, size()*sizeof(uint32_t));
         other.next        = other.buffer + size();
-        other.first_blk   = other.buffer + (first_blk-buffer);
-        other.current_blk = other.buffer + (current_blk-buffer);
-        other.blk_count   = blk_count;
     }
 
     void restore(InstrDeflateWindow &other) {
         memcpy(buffer, other.buffer, other.size());
         memcpy(buffer_counts, other.buffer_counts, other.size()*sizeof(uint32_t));
         next        = buffer + other.size();
-        first_blk   = buffer + (other.first_blk-other.buffer);
-        blk_count   = other.blk_count;
     }
 
     // record into a dedicated buffer that store counts of back references
@@ -1416,15 +1407,6 @@ public:
         DEBUG_FIRST_BLOCK(exit(1);)
     }
 
-    /* dump a block to disk. only works in "record" mode, because we make sure the window only contains 1 block */
-    void dump_block(int i)
-    {
-         std::ofstream block;
-         block.open ("/tmp/block" + std::to_string(i)+ ".dump");
-         block.write((char *)first_blk, next - first_blk);
-         block.close();
-    }
-
     // debug only
     unsigned dump(byte* const dst) {
         memcpy(dst, buffer, size());
@@ -1470,9 +1452,8 @@ public:
     /* called when the window is full.
      * note: not necessarily at the end of a block */
     void flush() {
-        assert(next >= current_blk);
         // Keep 32K of context, or the current unfinished block
-        const size_t keep_size = std::max(1UL << 15, size_t(next - current_blk));
+        const size_t keep_size = 1UL << 15;
         if(size() > keep_size ) { // allways true, currently at least
             /* what's going to happen
              * buffer
@@ -1517,11 +1498,6 @@ public:
 
             // update next pointer
             next = buffer + keep_size;
-
-            blk_count = 0;
-            current_blk -= evict_size;
-            assert(current_blk >= buffer);
-            first_blk = current_blk;
         }
     }
 
@@ -1533,23 +1509,14 @@ public:
                     nb_back_refs_in_block,
                     len_back_refs_in_block,
                     1.0*len_back_refs_in_block/nb_back_refs_in_block);
-        current_blk = next;
-        blk_count++;
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
     }
 
     void final_flush() {
-        assert(current_blk == next);
-
         // assert(target + size() >= target_end); // Rayan:  I'm removing this assert because in the future, we won't know the target_end (=uncompressed size)
          memcpy(target, buffer + (has_dummy_32k?(1<<15):0), size() - (has_dummy_32k?(1<<15):0));
     }
-
-
-    unsigned blk_count; /// Number of decoded blocks currently in the buffer
-    byte* current_blk; /// Start position of the current block in the buffer
-    byte* first_blk; /// Start position of the block that is currently first in the buffer
 
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
@@ -1742,23 +1709,6 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
     return true;
 }
 
-/* if we need to record blocks to disk, and we have not recorded yet, and it's time to record */
-void handle_recording(signed long long record, signed int &recording, long long position, InstrDeflateWindow &out_window, int nb_to_record)
-{
-    if (record > -1 && recording == -1 && position > record)
-    {
-        recording = nb_to_record;
-        fprintf(stderr,"recording %d blocks after compressed position %lld\n",recording, position);
-    }
-    if (recording > 0)
-    {
-        out_window.dump_block(nb_to_record-recording);
-        recording--;
-    }
-    if (record > -1)
-        out_window.flush(); // make sure the window only contains only 1 block
-}
-
 /* if we need to stop 20 blocks after some point, and that point has been reached, setup a counter */
 bool handle_until(signed long long until, signed int &until_counter, long long position)
 {
@@ -1800,7 +1750,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 			      byte * restrict const out, size_t out_nbytes_avail,
 			      size_t *actual_out_nbytes_ret,
                   int skip,
-                  signed long long record,
                   signed long long until)
 {
     InputStream in_stream(in, in_nbytes);
@@ -1814,8 +1763,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     int failed_decomp_counter = 0;
     uint64_t decoded_blocks = 0;
 
-    // handle skipping/recording
-    signed int recording = -1;
+    // handle skipping
     signed int until_counter = -1;
     int skip_counter = 0;
     int nb_to_record = 10;
@@ -1854,8 +1802,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             failed_decomp_counter = 0; // reset failed block counter
 
             long long position = in_stream.position();
-
-            handle_recording(record, recording, position, out_window, nb_to_record);
             if (handle_until(until, until_counter, position))
                 break;
             handle_skip(skip_counter, out_window);

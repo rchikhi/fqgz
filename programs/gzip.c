@@ -46,7 +46,6 @@ struct options {
 	bool keep;
 	const tchar *suffix;
     int skip;
-    signed long long record;
     signed long long until;
 };
 
@@ -70,7 +69,6 @@ show_usage(FILE *fp)
 "  -k        don't delete input files\n"
 "  -S SUF    use suffix SUF instead of .gz\n"
 "  -s BYTES  skip BYTES of compressed data, then skip 20 blocks, then decompress the rest\n"
-"  -r BYTES  record the next 20 blocks starting after position BYTES in compressed data\n"
 "  -u BYTES  stop 20 block after position BYTES in compressed data\n"
 "  -V        show version and legal information\n",
 	program_invocation_name);
@@ -127,8 +125,8 @@ load_u32_gzip(const byte *p)
 
 static int
 do_decompress(struct libdeflate_decompressor *decompressor,
-	      struct file_stream *in, struct file_stream *out, int skip, 
-          signed long long record, signed long long until)
+	      struct file_stream *in, struct file_stream *out, int skip,
+          signed long long until)
 {
 	const byte *compressed_data = static_cast<const byte*>(in->mmap_mem);
 	size_t compressed_size = in->mmap_size;
@@ -160,7 +158,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 					    compressed_size,
 					    uncompressed_data,
 					    uncompressed_size, &actual_uncompressed_size, skip, 
-                        record, until);
+                        until);
 
 	if (result == LIBDEFLATE_INSUFFICIENT_SPACE) {
 		msg("%" TS ": file corrupt or too large to be processed by this "
@@ -334,7 +332,7 @@ decompress_file(struct libdeflate_decompressor *decompressor, const tchar *path,
 	if (ret != 0)
 		goto out_close_out;
 
-	ret = do_decompress(decompressor, &in, &out, options->skip, options->record, options->until);
+	ret = do_decompress(decompressor, &in, &out, options->skip, options->until);
 	if (ret != 0)
 		goto out_close_out;
 
@@ -375,7 +373,6 @@ tmain(int argc, tchar *argv[])
 	options.keep = false;
 	options.suffix = T(".gz");
 	options.skip = 0;
-	options.record = -1;
 	options.until = -1;
 
 	while ((opt_char = tgetopt(argc, argv, optstring)) != -1) {
@@ -410,9 +407,6 @@ tmain(int argc, tchar *argv[])
 		case 's':
 			options.skip = atoi(toptarg);
             fprintf(stderr,"skipping %d bytes (experimental)\n",options.skip);
-			break;
-		case 'r':
-			options.record = atoi(toptarg);
 			break;
 		case 'u':
 			options.until = atoi(toptarg);
