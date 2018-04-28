@@ -1146,13 +1146,16 @@ public:
     }
 
     /// Move the 32K context to the start of the buffer
-    void flush(size_t window_size=1UL<<15) {
+    size_t flush(size_t window_size=1UL<<15) {
         assert(size() > window_size);
         assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
         memcpy(buffer, next - window_size, window_size);
+        size_t moved_by = (next - window_size) - buffer;
 
         // update next pointer
         next = buffer + window_size;
+
+        return moved_by;
     }
 
 protected:
@@ -1171,7 +1174,7 @@ public:
         target(target), target_start(target), target_end(target_end)
     {}
 
-    void flush(size_t start=0, size_t window_size=1UL<<15) {
+    size_t flush(size_t start=0, size_t window_size=1UL<<15) {
         assert(size() >= window_size);
         size_t evict_size = size() - window_size - start;
         assert(buffer + start + evict_size == next - window_size);
@@ -1181,7 +1184,7 @@ public:
         target += evict_size;
 
         // Then move the context to the start
-        DeflateWindow::flush(window_size);
+        return DeflateWindow::flush(window_size);
     }
 
     size_t get_evicted_length() {
@@ -1229,6 +1232,7 @@ public:
         assert(has_dummy_32k);
 
         next = buffer+(1<<15);
+        current_blk = next;
 
         for (int i = 0; i < (1<<15); i ++)
         {
@@ -1377,6 +1381,7 @@ public:
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
         std::string current_sequence = "";
+        unsigned current_sequence_pos = start_pos;
         for (long int i = start_pos; i < next-buffer; i ++)
         {
             unsigned char c = buffer[i];
@@ -1387,10 +1392,16 @@ public:
                 if ((c == '\r' || c == '\n' || c == '?')  //(buffer_counts[i] > 1000))  // actually not a good heursitic
                         && (current_sequence.size() > 30)) // heuristics here, assume reads at > 30 bp
                 {
+                    // Record the position of the first decoded sequence relative to the block start
+                    // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
+                    if(i >= current_blk - buffer) // FIXME: sync parser such that is always true
+                        first_seq_block_pos = i - (current_blk - buffer);
+
                     putative_sequences.push_back(current_sequence);
                     // note this code may capture stretches of quality values too
                 }
                 current_sequence = "";
+                current_sequence_pos = i+1;
             }
         }
         if (current_sequence.size() > 30)
@@ -1543,12 +1554,15 @@ public:
         memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
         memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
 
+        unsigned moved_by;
         if(output_to_target) {
             size_t start = has_dummy_32k ? 1UL<<15 : 0;
-            FlushableDeflateWindow::flush(start);
+            moved_by = FlushableDeflateWindow::flush(start);
         } else {
-           DeflateWindow::flush(); // Only move the context to the begining
+           moved_by = DeflateWindow::flush(); // Only move the context to the begining
         }
+
+        current_blk -= moved_by;
 
         has_dummy_32k = false;
     }
@@ -1561,9 +1575,14 @@ public:
                     nb_back_refs_in_block,
                     len_back_refs_in_block,
                     1.0*len_back_refs_in_block/nb_back_refs_in_block);
+
+        current_blk = next;
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
     }
+
+    byte* current_blk;
+    unsigned first_seq_block_pos = 0; /// Position of the first sequence relative to the current block start
 
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
@@ -1715,7 +1734,6 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         if (unlikely(length - 1 >= out.available())) {
                 if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH))
                 {
-                    out.notify_end_block(is_final_block, in_stream);
                     return true; // Block done
                 } else {
                         out.flush();
@@ -1832,12 +1850,10 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     InputStream backup_in(in_stream);
 
     do {
-
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
-        bool went_fine = false;
-
-        went_fine = do_block(d, in_stream, out_window, is_final_block);
+        size_t block_inpos = in_stream.position();
+        bool went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
             went_fine &= out_window.check_ascii();
             if(went_fine) {
@@ -1864,6 +1880,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                 if (out_window.fully_reconstructed)
                     fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
             }
+
+            out_window.notify_end_block(is_final_block, in_stream);
         }
         else
         {
