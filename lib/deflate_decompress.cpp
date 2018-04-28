@@ -59,11 +59,17 @@
 
 #include "libdeflate.h"
 
+#ifdef DEB
+#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
+#else
 #define PRINT_DEBUG(...) {}
-//#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
-#define DEBUG_FIRST_BLOCK(x) {}
-//#define DEBUG_FIRST_BLOCK(x) {x}
+#endif
 
+#ifdef FIRST_BLOCK
+#define DEBUG_FIRST_BLOCK(x) {x}
+#else
+#define DEBUG_FIRST_BLOCK(x) {}
+#endif
 
 /*
  * Each TABLEBITS number is the base-2 logarithm of the number of entries in the
@@ -1162,6 +1168,9 @@ protected:
 };
 
 
+/*
+ * this is when the buffer can be copied to a target
+ */
 class FlushableDeflateWindow : public DeflateWindow {
     using Base = DeflateWindow;
 
@@ -1224,6 +1233,7 @@ public:
             buffer_counts[i] = 0;
             backref_origins[i] = (1<<15) - i;
         }
+        block_size=0;
     }
 
     void clear() {
@@ -1276,11 +1286,13 @@ public:
         buffer_counts[size()] = 0;
         backref_origins[size()] = 0;
         Base::push(c);
+        block_size++;
     }
 
     void copy_match(unsigned length, unsigned offset) {
         record_match(length, offset);
         Base::copy_match(length, offset);
+        block_size += length;
     }
 
     void copy(InputStream & in, unsigned length) {
@@ -1313,8 +1325,10 @@ public:
         return ascii_found >= dec_size/4;
     }
 
+    // currently unused, replaced by check_ascii()
     // make sure the buffer contains at least something that looks like fastq
-    // funny story: sometimes a bad buffer may contain many repetitions of the same letter
+    //
+    // funny story: sometimes a bad buffer may contain many repetitions of the same ACTG letter
     // anyhow, this function could be vastly improved by penalizing non-ACTG chars
     bool check_buffer_fastq(bool previously_aligned, unsigned review_len=1<<15)
     {
@@ -1441,7 +1455,8 @@ public:
             }
         }
 
-        //pretty_print();
+        DEBUG_FIRST_BLOCK(pretty_print();)
+
         fprintf(stderr,"check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (res)
             fprintf(stderr,"fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
@@ -1555,8 +1570,8 @@ public:
     }
 
     void notify_end_block(bool is_final_block, InputStream& in_stream){
-        PRINT_DEBUG("block size was %ld bits left %ld overrun_count %lu nb back refs %u tot/average len %u/%.1f\n",
-                    next-current_blk,
+        PRINT_DEBUG("block size was %ld, bits left %ld, overrun_count %lu, nb backrefs %u, tot/avg backrefs len %u/%.1f\n",
+                    block_size,
                     in_stream.bitsleft,
                     in_stream.overrun_count,
                     nb_back_refs_in_block,
@@ -1564,13 +1579,15 @@ public:
                     1.0*len_back_refs_in_block/nb_back_refs_in_block);
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
+        block_size = 0;
     }
 
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
     bool fully_reconstructed; // flag to say whether context is fully reconstructed (heuristic)
 
-    // some back-references statistics
+    // some block/back-references statistics
+    unsigned block_size;
     unsigned nb_back_refs_in_block;
     unsigned len_back_refs_in_block;
 
@@ -1693,8 +1710,6 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                 return false;
             }
             out.push(byte(entry >> HUFFDEC_RESULT_SHIFT));
-
-            //fprintf(stderr,"literal: %c\n",byte(entry >> HUFFDEC_RESULT_SHIFT)); // this is indeed the plaintext decoded character, good to know
             continue;
         }
 
@@ -1815,7 +1830,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     // handle skipping
     signed int until_counter = -1;
     int skip_counter = 0;
-    int nb_to_record = 10;
 
     /* Skipping user-set amount of bytes, after the header of course */
     if (skip)
@@ -1824,10 +1838,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         out_window.output_to_target = false;
         skip_counter = 0; //20; // skip 20 blocks before checking for valid fastq // FIXME
     }
-
-    /* we will dump some blocks to disk. but first, remove existing ones */
-    for (int i = 0; i < nb_to_record; i++)
-        remove( ("/tmp/block" + std::to_string(i)+ ".dump").c_str() );
 
     bool is_final_block = false, aligned = false;
     InputStream backup_in(in_stream);

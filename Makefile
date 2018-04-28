@@ -28,6 +28,8 @@ override CFLAGS :=							\
 	$(call cc-option,-Wpedantic)					\
 	$(call cc-option,-Wvla)
 
+
+
 ##############################################################################
 
 STATIC_LIB_SUFFIX := .a
@@ -36,6 +38,19 @@ SHARED_LIB_CFLAGS := -fPIC
 PROG_SUFFIX       :=
 PROG_CFLAGS       :=
 HARD_LINKS        := 1
+
+
+#debugging options for decompression (Rayan)
+ifeq ($(deb),1)
+	 LIB_CFLAGS+= -DDEB=1
+endif
+
+ifeq ($(first),1)
+	 LIB_CFLAGS+= -DFIRST_BLOCK=1
+endif
+
+
+
 
 # Compiling for Windows with MinGW?
 ifneq ($(findstring -mingw,$(shell $(CXX) -dumpmachine 2>/dev/null)),)
@@ -134,6 +149,7 @@ PROG_CFLAGS += $(CFLAGS)		 \
 	       -D_POSIX_C_SOURCE=200809L \
 	       -D_FILE_OFFSET_BITS=64	 \
 	       -DHAVE_CONFIG_H
+
 
 PROG_COMMON_HEADERS := programs/prog_util.h programs/config.h
 PROG_COMMON_SRC     := programs/prog_util.c programs/tgetopt.c
