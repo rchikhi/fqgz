@@ -1535,9 +1535,50 @@ public:
         }
     }
 
+    void output_porcelain() {
+        // Don't print anything if there is no remaining backref
+        if(!has_dummy_32k) {
+            bool no_backref = true;
+            for(unsigned i=0; i < size(); i++) {
+                if(backref_origins[i] > 0) {
+                    assert(buffer[i]== byte('?'));
+                    no_backref = false;
+                    break;
+                }
+            }
+            if(no_backref)
+                return;
+        }
+
+        unsigned start = has_dummy_32k ? 1<<15 : 0;
+        unsigned back_ref_count = start;
+        for(unsigned i=0; i < size(); i++) {
+            if(backref_origins[i] > 0) {
+                assert(buffer[i]== byte('?'));
+                printf("b%d\n", backref_origins[i]);
+                back_ref_count++;
+            } else {
+                if(buffer[i]==byte('\n'))
+                    printf("c\\n\n", buffer[i]);
+                else
+                    printf("c%c\n", buffer[i]);
+            }
+        }
+
+        // Backref count no longer decreasing
+        if(backrefs_count_last_flush <= back_ref_count) {
+            if(flush_with_steady_blackrefs++ > 10) {
+                exit(0);
+            }
+        }
+
+        backrefs_count_last_flush = back_ref_count;
+    }
+
     /* called when the window is full.
      * note: not necessarily at the end of a block */
     void flush() {
+        output_porcelain();
         constexpr size_t window_size = 1UL<<15;
 
         // update counts
@@ -1573,6 +1614,8 @@ public:
     // some back-references statistics
     unsigned nb_back_refs_in_block;
     unsigned len_back_refs_in_block;
+    unsigned backrefs_count_last_flush = ~0U;
+    unsigned flush_with_steady_blackrefs = 0;
 
     uint32_t /* const (FIXME, Rayan: same as InputStream*/ *buffer_counts; /// Allocated counts for keeping track of how many back references in the buffer
     // Offsets in the primary unknown context window
