@@ -282,7 +282,11 @@ public:
     }
 
     inline size_t position() const {
-        return in_next - begin;
+        return (bitsleft / 8) + in_next - begin;
+    }
+
+    inline size_t position_bits() const {
+        return (bitsleft % 8);
     }
 
 
@@ -1212,35 +1216,25 @@ public:
         buffer_counts(new uint32_t[1 << output_buffer_bits]),
         backref_origins(new uint16_t[1 << output_buffer_bits])
     {
-        clear();
-    }
-
-    void clear() {
         Base::clear();
 
-        has_dummy_32k = true;
         for (int i = 0; i < (1<<15); i ++)
         {
             buffer[i] = '?';
             buffer_counts[i] = 0;
             backref_origins[i] = (1<<15) - i;
         }
+    }
+
+    void clear() {
+        assert(has_dummy_32k);
+
         next = buffer+(1<<15);
-    }
 
-    void backup(InstrDeflateWindow &other) {
-        //TODO: could we only copy the 32K ?
-        memcpy(other.buffer, buffer, size());
-        memcpy(other.buffer_counts, buffer_counts, size()*sizeof(uint32_t));
-        memcpy(other.backref_origins, backref_origins, size()*sizeof(uint16_t));
-        other.next        = other.buffer + size();
-    }
-
-    void restore(InstrDeflateWindow &other) {
-        memcpy(buffer, other.buffer, other.size());
-        memcpy(buffer_counts, other.buffer_counts, other.size()*sizeof(uint32_t));
-        memcpy(backref_origins, other.backref_origins, other.size()*sizeof(uint16_t));
-        next        = buffer + other.size();
+        for (int i = 0; i < (1<<15); i ++)
+        {
+            buffer_counts[i] = 0;
+        }
     }
 
     // record into a dedicated buffer that store counts of back references
@@ -1339,7 +1333,11 @@ public:
             size_t letter_histogram[5] = {0,0,0,0,0}; // A T G C N
             for (unsigned  i = start ;i < start + check_size; i ++)
             {
-                uint8_t code = ascii2Dna[buffer[i]];
+                unsigned char c = buffer[i];
+                if(c > '~') {
+                    return false;
+                }
+                uint8_t code = ascii2Dna[c];
                 if(code > 0) {
                     letter_histogram[code-1]++;
                     dna_letter_count++;
@@ -1443,7 +1441,7 @@ public:
             }
         }
 
-        pretty_print();
+        //pretty_print();
         fprintf(stderr,"check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (res)
             fprintf(stderr,"fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
@@ -1832,23 +1830,23 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         remove( ("/tmp/block" + std::to_string(i)+ ".dump").c_str() );
 
     bool is_final_block = false, aligned = false;
+    InputStream backup_in(in_stream);
 
     do {
-        InputStream backup_in(in_stream);
-        //out_window.backup(backup_out);
+
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
         bool went_fine = false;
 
         went_fine = do_block(d, in_stream, out_window, is_final_block);
-        if(!aligned && went_fine) {
+        if(unlikely(!aligned && went_fine)) {
             went_fine &= out_window.check_ascii();
             if(went_fine) {
                 PRINT_DEBUG("First sync block at %d %d\n", in_stream.position(), in_stream.position_bits());
             }
         }
 
-        if (went_fine)
+        if (likely(went_fine))
         {
             decoded_blocks++;
             aligned = true; // found a way to fully decompress a block, seems that we're good
@@ -1870,25 +1868,27 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         }
         else
         {
-            if (aligned)
+            if (unlikely(aligned))
             {
                 fprintf(stderr,"unexpected error, bad block after we thought we had found a correct one\n");
                 // we're not ready to support that case, as the buffer at this point contains something else than an empty context
                 exit(1);
             }
-            if (failed_decomp_counter > 300000*8)
+            if (unlikely(failed_decomp_counter > 300000*8))
             {
                 fprintf(stderr,"giving up, can't random-access this gzipped file even when bruteforcing next %d putative block positions\n", 300000*8);
                 exit(1);
             }
             failed_decomp_counter++;
             PRINT_DEBUG("couldn't decompress that block, increasing fail count to %d\n",failed_decomp_counter);
-            in_stream = backup_in;
-            in_stream.ensure_bits<1>(); // to make sure there is at least one bit to pop
-            in_stream.remove_bits(1);
 
-            out_window.restore(backup_out);
-            //PRINT_DEBUG("restored after bad block,    out window %x - %x\n", out_window.next, out_window.buffer_end); // next is now protected
+            // Restore input stream one bit ahead of last try
+            backup_in.ensure_bits<1>(); // to make sure there is at least one bit to pop
+            backup_in.remove_bits(1);
+            in_stream = backup_in;
+
+            // Restore output window initial state (zero position and stats)
+            out_window.clear();
             PRINT_DEBUG("restored after bad block\n");
         }
     } while((!aligned) || (aligned && !is_final_block));
