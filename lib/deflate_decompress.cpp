@@ -1225,7 +1225,7 @@ public:
         buffer_counts(new uint32_t[1 << output_buffer_bits]),
         backref_origins(new uint16_t[1 << output_buffer_bits])
     {
-        Base::clear();
+        clear();
 
         for (int i = 0; i < (1<<15); i ++)
         {
@@ -1312,7 +1312,7 @@ public:
         }
 
         unsigned ascii_found = 0;
-        for(unsigned i = has_dummy_32k ? (1<<15) : 0 ; i < size() ; i++) {
+        for(unsigned i = start ; i < size() ; i++) {
             unsigned char c = buffer[i];
             if(c > '~') {
                 return false;
@@ -1333,11 +1333,11 @@ public:
     bool check_buffer_fastq(bool previously_aligned, unsigned review_len=1<<15)
     {
         unsigned start = has_dummy_32k ? (1<<15) : 0;
-        if (next - buffer < review_len + start)
+        if (size() < review_len + start)
             return false; // block too small, nothing to do
 
 
-        PRINT_DEBUG("potential good block, beginning fastq check, bounds %ld %ld\n",next-(1<<15) - buffer, next - buffer);
+        PRINT_DEBUG("potential good block, beginning fastq check, bounds %ld %ld\n",next-(1<<15) - buffer, size());
         // check the first 5K, mid 5K, last 5K
         unsigned check_size = 5000;
         unsigned long int pos[3] = { size() - review_len, size() - review_len/2, size() - check_size };
@@ -1455,8 +1455,9 @@ public:
             }
         }
 
-        DEBUG_FIRST_BLOCK(pretty_print();)
-
+#ifdef DEB
+        pretty_print();
+#endif
         fprintf(stderr,"check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (res)
             fprintf(stderr,"fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
@@ -1479,7 +1480,7 @@ public:
     // debug only
     unsigned dump(byte* const dst) {
         memcpy(dst, buffer, size());
-        return next - buffer;
+        return size();
     }
 
     void pretty_print()
