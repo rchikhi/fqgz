@@ -146,13 +146,13 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 
 	uncompressed_size = load_u32_gzip(&compressed_data[compressed_size - 4]);
 
-	uncompressed_data = new byte[uncompressed_size];
-	if (uncompressed_data == NULL) {
-		msg("%" TS ": file is probably too large to be processed by this "
-		    "program", in->name);
-		ret = -1;
-		goto out;
-	}
+//	uncompressed_data = new byte[uncompressed_size];
+//	if (uncompressed_data == NULL) {
+//		msg("%" TS ": file is probably too large to be processed by this "
+//		    "program", in->name);
+//		ret = -1;
+//		goto out;
+//	}
 
 
 	result = libdeflate_gzip_decompress(decompressor,
@@ -177,7 +177,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 
 	//ret = full_write(out, uncompressed_data, actual_uncompressed_size);
 out:
-	delete uncompressed_data;
+    // delete uncompressed_data;
 	return ret;
 }
 

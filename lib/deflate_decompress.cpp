@@ -1560,7 +1560,7 @@ public:
         memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
 
         unsigned moved_by;
-        if(output_to_target) {
+        if(false && output_to_target) {
             size_t start = has_dummy_32k ? 1UL<<15 : 0;
             moved_by = FlushableDeflateWindow::flush(start);
         } else {
