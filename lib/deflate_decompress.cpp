@@ -1039,7 +1039,7 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
     return true;
 }
 
-#define output_buffer_bits 20 // FIXME: constructor parameter
+#define output_buffer_bits 24 // FIXME: constructor parameter
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
@@ -1224,7 +1224,7 @@ public:
         for (int i = 0; i < (1<<15); i ++)
         {
             buffer[i] = '?';
-            backref_origins[i] = (1<<15) - i;
+            //backref_origins[i] = (1<<15) - i;
         }
     }
 
@@ -1236,7 +1236,7 @@ public:
 
         for (int i = 0; i < (1<<15); i ++)
         {
-            buffer_counts[i] = 0;
+            //buffer_counts[i] = 0;
         }
     }
 
@@ -1244,12 +1244,12 @@ public:
     void record_match(unsigned length, unsigned offset) {
         size_t start = size() - offset;
         for (unsigned int i = 0; i < length; i++) {
-            buffer_counts[size()+i] = ++buffer_counts[start+i];
-            backref_origins[size()+i] = backref_origins[start+i];
+	    //buffer_counts[size()+i] = ++buffer_counts[start+i];
+            //backref_origins[size()+i] = backref_origins[start+i];
         }
 
-        nb_back_refs_in_block++;
-        len_back_refs_in_block += length;
+//        nb_back_refs_in_block++;
+  //      len_back_refs_in_block += length;
     }
 
     bool check_match(unsigned length, unsigned offset) {
@@ -1276,8 +1276,8 @@ public:
 
     void push(byte c) {
         DEBUG_FIRST_BLOCK(if (c >' ' && c<'}') fprintf(stderr,"literal %c\n",c);)
-        buffer_counts[size()] = 0;
-        backref_origins[size()] = 0;
+    //    buffer_counts[size()] = 0;
+    //    backref_origins[size()] = 0;
         Base::push(c);
     }
 
@@ -1289,8 +1289,8 @@ public:
     void copy(InputStream & in, unsigned length) {
         size_t start = size();
         for(size_t i=start ; i < start + length ; i++) {
-            buffer_counts[i]=0;
-            backref_origins[i]=0;
+      //      buffer_counts[i]=0;
+      //      backref_origins[i]=0;
         }
         Base::copy(in, length);
     }
@@ -1556,8 +1556,8 @@ public:
         constexpr size_t window_size = 1UL<<15;
 
         // update counts
-        memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
-        memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
+        //memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
+        //memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
 
         unsigned moved_by;
         if(false && output_to_target) {
@@ -1865,7 +1865,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         size_t block_inpos = in_stream.position();
         bool went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
-            went_fine &= out_window.check_ascii();
+            went_fine &= out_window.check_buffer_fastq(aligned);
             if(went_fine) {
                 PRINT_DEBUG("First sync block at %d %d\n", in_stream.position(), in_stream.position_bits());
             }
