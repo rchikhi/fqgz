@@ -110,6 +110,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 			return LIBDEFLATE_BAD_DATA;
 	}
 
+        nthreads = std::min(1 + unsigned(in_nbytes >> 26), nthreads);
         if(nthreads <= 1) {
             /* Compressed data  */
             result = libdeflate_deflate_decompress(d, in_next,
@@ -119,7 +120,9 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
         } else {
             std::vector<std::thread> threads; threads.reserve(nthreads);
             std::vector<synchronizer> syncs(nthreads-1);
-            size_t chunk_size = (in_end - in_next)/nthreads;
+
+            size_t first_chunk_size = ((in_end - in_next) - skip)/nthreads + (1UL << 24);
+            size_t chunk_size = ((in_end - in_next) - first_chunk_size)/(nthreads-1);
 
             size_t start = skip;
             synchronizer* prev_sync = nullptr;
@@ -138,13 +141,13 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
                                 start, until);
 
                     if (local_result != LIBDEFLATE_SUCCESS)
-                        exit(LIBDEFLATE_SUCCESS); //FIXME: use futures to pass resulte
+                        exit(LIBDEFLATE_SUCCESS); //FIXME: use futures to pass result
 
                     libdeflate_free_decompressor(local_d);
                 });
 
                 prev_sync = stop;
-                start += chunk_size;
+                start += i == 0 ? first_chunk_size : chunk_size;
             }
 
             for(auto& thread : threads) thread.join();
