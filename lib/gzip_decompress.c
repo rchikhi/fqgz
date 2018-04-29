@@ -44,8 +44,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
                            byte *out, size_t out_nbytes_avail,
                            size_t *actual_out_nbytes_ret,
                            unsigned nthreads,
-                           int skip,
-               signed long long until)
+                           size_t skip, size_t until)
 {
 	const byte *in_next = in;
 	const byte * const in_end = in_next + in_nbytes;

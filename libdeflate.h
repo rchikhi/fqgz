@@ -228,8 +228,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor *decompressor,
 			      size_t *actual_out_nbytes_ret,
                   synchronizer* stop,  // indicating where to stop
                   synchronizer* prev_sync, // for passing our first extracted sequence coordinate to the previous thread
-                  int skip,
-                  signed long long until);
+                  size_t skip, size_t until);
 
 /*
  * Like libdeflate_deflate_decompress(), but assumes the zlib wrapper format
@@ -251,8 +250,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *decompressor,
 			   byte *out, size_t out_nbytes_avail,
                size_t *actual_out_nbytes_ret,
                unsigned nthreads,
-               int skip,
-                signed long long until);
+               size_t skip, size_t until);
 
 /*
  * libdeflate_free_decompressor() frees a decompressor that was allocated with

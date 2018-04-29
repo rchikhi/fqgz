@@ -1783,9 +1783,9 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
 }
 
 /* if we need to stop 20 blocks after some point, and that point has been reached, setup a counter */
-bool handle_until(signed long long until, signed int &until_counter, long long position)
+bool handle_until(size_t until, int &until_counter, size_t position)
 {
-    if (until > -1 && until_counter == -1 && position > until)
+    if (until_counter == -1 && position > until)
         until_counter = 20;
     if (until_counter > 0)
     {
@@ -1824,8 +1824,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 			      size_t *actual_out_nbytes_ret,
                   synchronizer* stop,  // indicating where to stop
                   synchronizer* prev_sync, // for passing our first extracted sequence coordinate to the previous thread
-                  int skip,
-                  signed long long until)
+                  size_t skip, size_t until)
 {
     InputStream in_stream(in, in_nbytes);
 
