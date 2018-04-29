@@ -1039,7 +1039,7 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
     return true;
 }
 
-#define output_buffer_bits 24 // FIXME: constructor parameter
+#define output_buffer_bits 21 // FIXME: constructor parameter
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
@@ -1902,7 +1902,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
                 }
             } else  { //FIXME: we want all the sequences, right ?
-                out_window.check_fully_reconstructed_sequences(stop, is_final_block);
+                //out_window.check_fully_reconstructed_sequences(stop, is_final_block);
             }
 
             out_window.notify_end_block(is_final_block, in_stream);
