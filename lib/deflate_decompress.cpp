@@ -1536,23 +1536,8 @@ public:
     }
 
     void output_porcelain() {
-        // Don't print anything if there is no remaining backref
-        if(!has_dummy_32k) {
-            bool no_backref = true;
-            for(unsigned i=0; i < size(); i++) {
-                if(backref_origins[i] > 0) {
-                    assert(buffer[i]== byte('?'));
-                    no_backref = false;
-                    break;
-                }
-            }
-            if(no_backref)
-                return;
-        }
-
-        unsigned start = has_dummy_32k ? 1<<15 : 0;
-        unsigned back_ref_count = start;
-        for(unsigned i=start ; i < size(); i++) {
+        unsigned back_ref_count = 0;
+        for(unsigned i=1<<15 ; i < size(); i++) {
             if(backref_origins[i] > 0) {
                 assert(buffer[i]== byte('?'));
                 printf("b%d\n", backref_origins[i]);
