@@ -438,7 +438,7 @@ xclose(struct file_stream *strm)
 			msg_errno("Error closing %" TS, strm->name);
 			ret = -1;
 		}
-		delete strm->name;
+        delete[] strm->name;
 	}
 
 	if (strm->mmap_token != NULL) {
