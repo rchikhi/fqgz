@@ -1154,11 +1154,17 @@ struct DeflateWindow {
     {}
 
     ~DeflateWindow()    {
-        delete[] buffer;
+        if(next != nullptr)
+            delete[] buffer;
     }
 
-    DeflateWindow(DeflateWindow&&) = default;
-    DeflateWindow& operator=(DeflateWindow&&) = default;
+    DeflateWindow(DeflateWindow&& from) :
+        buffer(from.buffer),
+        buffer_end(buffer + buffer_size),
+        next(from.next)
+    {
+        from.next = nullptr;
+    }
 
     /// Clone the context window
     DeflateWindow(const DeflateWindow& from) : DeflateWindow()
