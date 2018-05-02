@@ -1307,9 +1307,9 @@ class FlushableDeflateWindow : public DeflateWindow<> {
     using Base = DeflateWindow;
 
 public:
-    FlushableDeflateWindow(byte* target, byte* target_end)
+    FlushableDeflateWindow(byte* _target, byte* _target_end)
         : DeflateWindow(),
-        target(target), target_start(target), target_end(target_end)
+        target(_target), target_start(_target), target_end(_target_end)
     {}
 
     wsize_t flush(wsize_t start=0, wsize_t window_size=context_size) {
@@ -1562,8 +1562,7 @@ public:
     // anyhow, this function could be vastly improved by penalizing non-ACTG chars
     bool check_buffer_fastq(bool previously_aligned, wsize_t review_len=context_size)
     {
-        wsize_t start = has_dummy_32k ? context_size : 0;
-        if (size() < review_len + start)
+        if (size() < (has_dummy_32k ? context_size : 0))
             return false; // block too small, nothing to do
 
 
@@ -2069,7 +2068,7 @@ std::pair<Window, size_t> do_skip(struct libdeflate_decompressor * restrict d,
             {
                 fprintf(stderr, "%lu %lu %lu\n", bits_skipped, in_stream.position_bits(), cur_in.position_bits());
                 in_stream = cur_in;
-                return { out_window, bits_skipped };
+                return { std::move(out_window), bits_skipped };
             }
             fprintf(stderr,"FP %lu\n", out_window.size()-out_window.context_size);
         }
