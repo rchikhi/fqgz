@@ -49,7 +49,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 	const byte *in_next = in;
 	const byte * const in_end = in_next + in_nbytes;
 	byte flg;
-	size_t actual_out_nbytes;
+//	size_t actual_out_nbytes;
 	enum libdeflate_result result;
 
 	if (in_nbytes < GZIP_MIN_OVERHEAD)
@@ -157,10 +157,10 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 	if (result != LIBDEFLATE_SUCCESS)
 		return result;
 
-	if (actual_out_nbytes_ret)
-		actual_out_nbytes = *actual_out_nbytes_ret;
-	else
-		actual_out_nbytes = out_nbytes_avail;
+//	if (actual_out_nbytes_ret)
+//		actual_out_nbytes = *actual_out_nbytes_ret;
+//	else
+//		actual_out_nbytes = out_nbytes_avail;
 
 	in_next = in_end - GZIP_FOOTER_SIZE;
 
