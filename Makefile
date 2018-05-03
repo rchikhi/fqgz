@@ -21,10 +21,10 @@ cc-option = $(shell if $(CXX) $(1) -c -x c /dev/null -o /dev/null \
 	      1>&2 2>/dev/null; then echo $(1); fi)
 
 override CFLAGS :=							\
-        $(CFLAGS) -O4 -flto -march=native -mtune=native -g -std=c++14 -I. -Icommon -lpthread	\
+        $(CFLAGS) -O0 -march=native -mtune=native -g -std=c++14 -I. -Icommon -lpthread	\
 	-Iexternal/type_safe/include					\
 	-Iexternal/type_safe/external/debug_assert			\
-	-Wall -Wundef							\
+        -Wall -Wundef -Wrestrict -Wnull-dereference -Wuseless-cast -Wshadow -Weffc++ \
 	$(call cc-option,-Wpedantic)					\
 	$(call cc-option,-Wvla)
 
