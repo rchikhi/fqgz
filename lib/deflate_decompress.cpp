@@ -1308,9 +1308,6 @@ public:
             if(c > byte('~') || c < byte('\t')) {
                 return false;
             }
-            if(c != '?') {
-                return true;
-            }
         }
 
         return true; // If no literal were emitted in the first block
