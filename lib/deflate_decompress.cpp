@@ -163,14 +163,7 @@ struct libdeflate_decompressor {
  * macros.
  */
 
-/*
- * The type for the bitbuffer variable ('bitbuf' described above).  For best
- * performance, this should have size equal to a machine word.
- *
- * 64-bit platforms have a significant advantage: they get a bigger bitbuffer
- * which they have to fill less often.
- */
-typedef machine_word_t bitbuf_t;
+
 
 
 #ifdef NDEBUG
@@ -193,25 +186,57 @@ __assert_fail (const char *assertion, const char *file, unsigned int line, const
     std::abort();
 }
 
-
 /**
  * @brief Model an compressed gzip input stream
  * It can be read by dequeing n<32 bits at a time or as byte aligned u16 words
  */
 class InputStream {
+public: //protected: //FIXME
+    /*
+     * The type for the bitbuffer variable ('bitbuf' described above).  For best
+     * performance, this should have size equal to a machine word.
+     *
+     * 64-bit platforms have a significant advantage: they get a bigger bitbuffer
+     * which they have to fill less often.
+     */
+    using bitbuf_t = machine_word_t;
+    using bitbuf_size_t = uint_fast32_t;
 
-public: //protected:
     /** State */
-    bitbuf_t bitbuf; /// Bit buffer
-    size_t bitsleft; /// Number of valid bits in the bit buffer
-    size_t overrun_count;
-    const byte * begin;
+    const byte *const begin;
     const byte *restrict in_next; /// Read pointer
-    const byte *restrict /*const*/ in_end; /// Adress of the byte after input
+    const byte *restrict const in_end; /// Adress of the byte after input
+    bitbuf_t bitbuf = bitbuf_t(0); /// Bit buffer
+    bitbuf_size_t bitsleft = 0; /// Number of valid bits in the bit buffer
+    bitbuf_size_t overrun_count = 0;
+    bool reached_final_block = false;
+
+    /**
+     * Number of bits the bitbuffer variable can hold.
+     */
+    static constexpr bitbuf_size_t bitbuf_length = 8 * sizeof(bitbuf_t);
+
+    /**
+     * The maximum number of bits that can be requested to be in the bitbuffer
+     * variable.  This is the maximum value of 'n' that can be passed
+     * ensure_bits(n).
+     *
+     * This not equal to BITBUF_NBITS because we never read less than one byte at a
+     * time.  If the bitbuffer variable contains more than (BITBUF_NBITS - 8) bits,
+     * then we can't read another byte without first consuming some bits.  So the
+     * maximum count we can ensure is (BITBUF_NBITS - 7).
+     */
+    static constexpr bitbuf_size_t bitbuf_max_ensure = bitbuf_length - 7;
+
+    /**
+     * Does the bitbuffer variable currently contain at least 'n' bits?
+     */
+    inline bool have_bits(size_t n) const
+    { return bitsleft >= n; }
 
     /**
      * Fill the bitbuffer variable by reading the next word from the input buffer.
-     * This can be significantly faster than FILL_BITS_BYTEWISE().  However, for
+     * This can be significantly faster than fill_bits_bytewise().  However, for
      * this to work correctly, the word must be interpreted in little-endian format.
      * In addition, the memory access may be unaligned.  Therefore, this method is
      * most efficient on little-endian architectures that support fast unaligned
@@ -222,12 +247,6 @@ public: //protected:
         in_next += (bitbuf_length - bitsleft) >> 3;
         bitsleft += (bitbuf_length - bitsleft) & ~7;
     }
-
-    /**
-     * Does the bitbuffer variable currently contain at least 'n' bits?
-     */
-    inline bool have_bits(size_t n) const
-    { return bitsleft >= n; }
 
     /**
      * Fill the bitbuffer variable, reading one byte at a time.
@@ -248,7 +267,7 @@ public: //protected:
     inline void fill_bits_bytewise() {
         do {
                if (likely(in_next != in_end))
-                       bitbuf |= (bitbuf_t)*in_next++ << bitsleft;
+                       bitbuf |= bitbuf_t(*in_next++) << bitsleft;
                else
                        overrun_count++;
                bitsleft += 8;
@@ -256,60 +275,87 @@ public: //protected:
     }
 
 public:
-    InputStream(const byte* in, size_t len) : bitbuf(0), bitsleft(0), overrun_count(0),
+    InputStream(const byte* in, size_t len) :
         begin(in), in_next(in), in_end(in + len)
     {}
 
-    /**
-     * Number of bits the bitbuffer variable can hold.
-     */
-    static constexpr size_t bitbuf_length = 8 * sizeof(bitbuf_t);
+    InputStream(const InputStream&) = default;
 
-    /**
-     * The maximum number of bits that can be requested to be in the bitbuffer
-     * variable.  This is the maximum value of 'n' that can be passed
-     * ENSURE_BITS(n).
-     *
-     * This not equal to BITBUF_NBITS because we never read less than one byte at a
-     * time.  If the bitbuffer variable contains more than (BITBUF_NBITS - 8) bits,
-     * then we can't read another byte without first consuming some bits.  So the
-     * maximum count we can ensure is (BITBUF_NBITS - 7).
-     */
-    static constexpr size_t bitbuf_max_ensure = bitbuf_length - 7;
+    /// states asignments for the same stream (for backtracking)
+    InputStream& operator=(const InputStream& from) {
+        assert(begin == from.begin && in_end == from.in_end);
 
-    inline size_t size() const {
+        in_next = from.in_next;
+        bitbuf = from.bitbuf;
+        bitsleft = from.bitsleft;
+        overrun_count = from.overrun_count;
+        reached_final_block = from.reached_final_block;
+        return *this;
+    }
+
+    InputStream(InputStream&&) = default;
+    InputStream& operator=(InputStream&&) = default;
+
+    size_t size() const {
+        assert(in_end >= begin);
+        return in_end - begin;
+    }
+
+    /** Remaining available bytes
+     * @note align_input() should be called first in order to get accurate readings (or use available_bits() / 8)
+     */
+    size_t available() const {
+        assert(in_end >= in_next);
         return in_end - in_next;
     }
 
-    inline size_t position() const {
-        return (bitsleft / 8) + in_next - begin;
+    /// Remaining available bits
+    size_t available_bits() const {
+        return 8*available() + bitsleft;
     }
 
-    inline size_t position_bits() const {
-        return (bitsleft % 8);
+    /** Position in the stream in bytes
+     * @note align_input() should be called first in order to get accurate readings (or use position_bits() / 8)
+     */
+    size_t position() const {
+        assert(in_next >= begin);
+        return in_next - begin;
     }
 
+    size_t position_bits() const {
+        return 8*position() - bitsleft;
+    }
+
+    /// Seek forward
+    void skip(size_t offset) {
+        align_input();
+        assert(in_next + offset < in_end);
+        in_next += offset;
+    }
 
     /**
      * Load more bits from the input buffer until the specified number of bits is
      * present in the bitbuffer variable.  'n' cannot be too large; see MAX_ENSURE
      * and CAN_ENSURE().
      */
-    template <size_t n>
-    inline void ensure_bits() {
+    template <bitbuf_size_t n>
+    bool ensure_bits() {
         static_assert(n <= bitbuf_max_ensure, "Bit buffer is too small");
-        if (!have_bits(n)) {						\
-                if (likely(in_end - in_next >= static_cast<std::ptrdiff_t>(sizeof(bitbuf_t))))	\
-                        fill_bits_wordwise();				\
-                else fill_bits_bytewise();                              \
+        if (!have_bits(n)) {
+                if(unlikely(available() < 1))
+                    return false; // This is not acceptable overrun
+                if (likely(available() >= sizeof(bitbuf_t)))
+                    fill_bits_wordwise();
+                else
+                    fill_bits_bytewise();
         }
+        return true;
     }
 
     /**
      * Return the next 'n' bits from the bitbuffer variable without removing them.
      */
-    inline u32 bits(size_t n) const
-    {
+    u32 bits(bitbuf_size_t n) const {
         assert(bitsleft >= n);
         return  u32(bitbuf & ((u32(1) << n) - 1));
     }
@@ -317,7 +363,7 @@ public:
     /**
      * Remove the next 'n' bits from the bitbuffer variable.
      */
-    inline void remove_bits(size_t n) {
+    inline void remove_bits(bitbuf_size_t n) {
         assert(bitsleft >= n);
         bitbuf >>= n;
         bitsleft -= n;
@@ -326,7 +372,7 @@ public:
     /**
      * Remove and return the next 'n' bits from the bitbuffer variable.
      */
-    inline u32 pop_bits(size_t n) {
+    inline u32 pop_bits(bitbuf_size_t n) {
         u32 tmp = bits(n);
         remove_bits(n);
         return tmp;
@@ -342,7 +388,10 @@ public:
      * be actually discarded.
      */
     inline void align_input() {
-        in_next -= (bitsleft >> 3) - std::min(overrun_count, bitsleft >> 3);
+        assert(overrun_count <= (bitsleft >> 3));
+        in_next -= (bitsleft >> 3) - overrun_count;
+        // was:
+        //in_next -= (bitsleft >> 3) - std::min(overrun_count, bitsleft >> 3);
         bitbuf = 0;
         bitsleft = 0;
     }
@@ -352,7 +401,7 @@ public:
      * to ALIGN_INPUT(), and the caller must have already checked for overrun.
      */
     inline u16 pop_u16() {
-        assert(size() >= 2);
+        assert(available() >= 2);
         u16 tmp = get_unaligned_le16(in_next);
         in_next += 2;
         return tmp;
@@ -364,9 +413,25 @@ public:
       * call to align_input()
       */
     inline void copy(byte* restrict out, size_t n) {
-        assert(size() >= n);
+        assert(available() >= n);
         memcpy(out, in_next, n);
         in_next += n;
+    }
+
+    /**
+      * Checks that the lenght next bytes are ascii
+      * (for checked copy()ies of uncompressed blocks)
+      */
+    inline bool check_ascii(size_t n) {
+        if(unlikely(n > available()))
+            return false;
+
+        for(size_t i=0 ; i < n ; i++) {
+            byte c = in_next[i];
+            if(c > byte('c') || c < byte('\t'))
+                return false;
+        }
+        return true;
     }
 
 };
@@ -1612,7 +1677,7 @@ bool do_uncompressed(InputStream& in_stream, InstrDeflateWindow& out) {
 
     in_stream.align_input();
 
-    if (!(in_stream.size() >= 4))
+    if (unlikely(in_stream.available() < 4))
     {
         PRINT_DEBUG("bad block (trivially due to uncompressed check)\n");
         return false;
@@ -1627,7 +1692,7 @@ bool do_uncompressed(InputStream& in_stream, InstrDeflateWindow& out) {
         return false;
     }
 
-    if (!(len <= in_stream.size()))
+    if (unlikely(len > in_stream.available()))
     {
         PRINT_DEBUG("bad block (trivially due to uncompressed check)\n");
         return false;
@@ -1643,7 +1708,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
 
-    if (in_stream.size() == 0) // Rayan: i've added that check but i doubt it's useful (actually.. maybe it is, if we have been unable to decompress any block..)
+    if (unlikely(in_stream.available() == 0)) // Rayan: i've added that check but i doubt it's useful (actually.. maybe it is, if we have been unable to decompress any block..)
     {
         fprintf(stderr,"reached end of file\n");
         is_final_block = true;
