@@ -2017,19 +2017,83 @@ bool handle_until(size_t until, int &until_counter, size_t position)
     return false;
 }
 
-/* if we're doing random access:
- * - don't output to target the first 20 blocks for sure
- * - start outputting to target when we are sure that the buffer window contains fully resolved sequences
- */
-void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
+
+
+template<typename Window>
+std::pair<Window, size_t> do_skip(struct libdeflate_decompressor * restrict d,
+                                  InputStream& in_stream,
+                                  const size_t skip=0,
+                                  const unsigned required_valid_blocks=Window::buffer_size>>18, // Number of blocks that can sefelly fit without flushing
+                                  const size_t max_bits_skip=size_t(1)<<(3+20), // 1MiB
+                                  const size_t min_block_size=1<<10            // 10KiB
+                                  )
 {
-    if (skip_counter > 0)
-        skip_counter--;
-    if (skip_counter == 0 && out_window.fully_reconstructed)
+    if(skip == 0) return { Window(), size_t(0) };
+    in_stream.skip(skip);
+
+    SyncingDeflateWindow<Window> out_window;
+    size_t bits_skipped = 0;
+    for(;
+        bits_skipped < max_bits_skip && in_stream.ensure_bits<1>();
+        bits_skipped++, in_stream.remove_bits(1))
     {
-        //out_window.flush(); // re-initialize the window with just a context and no other block data // TODO not sure if that should be placed here or outside if
-        out_window.output_to_target = true; // the next block and so on will be output to "out"
+        if(in_stream.bits(1)) // We don't except to find a final block
+            continue;
+
+        InputStream cur_in = in_stream;
+
+//        if(cur_in.position_bits() >= 415018) {
+//            fprintf(stderr, "Block reached!!\n");
+//        })
+
+        if(unlikely(do_block(d, cur_in, out_window, ShouldFail{})
+                    && out_window.size() - out_window.context_size > min_block_size))
+        {
+            bool went_fine = true;
+            for(unsigned trial=0;
+                trial < required_valid_blocks
+                    && likely(went_fine)
+                    && likely(!cur_in.reached_final_block) ;
+                trial++)
+            {
+                    went_fine &= do_block(d, cur_in, out_window, ShouldSucceed{});
+            }
+            if(likely(went_fine
+                      && cur_in.reached_final_block == (cur_in.available() == 0) ))
+            {
+                fprintf(stderr, "%lu %lu %lu\n", bits_skipped, in_stream.position_bits(), cur_in.position_bits());
+                in_stream = cur_in;
+                return { out_window, bits_skipped };
+            }
+            fprintf(stderr,"FP %lu\n", out_window.size()-out_window.context_size);
+        }
+
+        out_window.clear();
     }
+
+    fprintf(stderr,"Failled to do %lu bytes skip:\n"
+                   "\tbits skipped:\t\t%lu/%lu\n"
+                   "\tinput remaning bytes:\t%lu\n",
+            skip,
+            bits_skipped,
+            max_bits_skip,
+            in_stream.available());
+    exit(1);
+}
+
+void print_block_boundaries(struct libdeflate_decompressor * restrict d,
+                            const InputStream& in_stream,
+                            size_t nb_blocks=~size_t(0)) {
+    SyncingDeflateWindow<DeflateWindow<>> out_window;
+    InputStream cur_in = in_stream;
+    for(size_t i=0 ; i < nb_blocks && !cur_in.reached_final_block; i++) {
+        fprintf(stderr, "Block bundary: %12lubits, remains: %12lubits %12lu %12lu\n",
+                cur_in.position_bits(), cur_in.available_bits(), cur_in.position_bits() + cur_in.available_bits(), 8*(cur_in.in_end - cur_in.begin));
+        assert(do_block(d, cur_in, out_window, MustSucceed{}));
+        out_window.clear();
+    }
+    fprintf(stderr, "Block bundary: %12lubits, remains: %12lubits %12lu %12lu\n",
+            cur_in.position_bits(), cur_in.available_bits(), cur_in.position_bits() + cur_in.available_bits(), 8*(cur_in.in_end - cur_in.begin));
 }
 
 // Original API:
@@ -2044,11 +2108,24 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                   size_t skip, size_t until)
 {
     InputStream in_stream(in, in_nbytes);
+    stderr = stdout;
 
-    byte *out_next = out;
-    byte * const out_end = out_next + out_nbytes_avail;
-    InstrDeflateWindow out_window(out, out_end);
-    InstrDeflateWindow backup_out(out, out_end);
+    //byte *out_next = out;
+    //byte * const out_end = out_next + out_nbytes_avail;
+
+    print_block_boundaries(d, in_stream);
+
+    while(!in_stream.reached_final_block) {
+        auto pair = do_skip<DeflateWindow<>>(d, in_stream, skip);
+        fprintf(stderr, "Managed to skip after %lu bits\n"
+                "\t out_window.size(): %lu\n"
+                , pair.second, pair.first.size());
+        //exit(0);
+    }
+
+#if 0
+    InstrDeflateWindow out_window;
+
 
     // blocks counter
     int failed_decomp_counter = 0;
@@ -2056,7 +2133,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     // handle skipping
     signed int until_counter = -1;
-    int skip_counter = 0;
     int nb_to_record = 10;
 
     fprintf(stderr, "Thread %lu started with a skip of %lu bytes\n", pthread_self(), skip);
@@ -2065,8 +2141,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     if (skip)
     {
         in_stream.in_next += skip; // TODO: will probably not be valid when input is a stream
-        out_window.output_to_target = false;
-        skip_counter = 0; //20; // skip 20 blocks before checking for valid fastq // FIXME
     }
 
     /* we will dump some blocks to disk. but first, remove existing ones */
@@ -2080,7 +2154,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
         size_t block_inpos = in_stream.position();
-        bool went_fine = do_block(d, in_stream, out_window, is_final_block);
+        bool went_fine = do_block(d, in_stream, out_window, is_final_block, ShouldFail{});
         if(unlikely(!aligned && went_fine)) {
             went_fine &= out_window.check_ascii();
             if(went_fine) {
@@ -2099,7 +2173,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             long long position = in_stream.position();
             if (handle_until(until, until_counter, position))
                 break;
-            handle_skip(skip_counter, out_window);
 
             if(stop != nullptr && !is_final_block) {
                 is_final_block |= stop->caught_up_block(block_inpos);
@@ -2107,7 +2180,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     fprintf(stderr, "thread %lu stoped at %lu\n", pthread_self(), block_inpos);
             }
 
-            if (skip_counter == 0 && out_window.fully_reconstructed == false)
+            if (out_window.fully_reconstructed == false)
             {
                 out_window.check_fully_reconstructed_sequences(stop, is_final_block); // see if we have uncertainties in nucleotides
                 if (out_window.fully_reconstructed) {
@@ -2153,8 +2226,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     out_window.flush();
 
-    *actual_out_nbytes_ret = out_window.get_evicted_length(); // tell how many bytes we actually output
-
+#endif
 
     return LIBDEFLATE_SUCCESS;
 }
