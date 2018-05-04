@@ -86,7 +86,7 @@ LIB_CFLAGS += $(CFLAGS) -fvisibility=hidden -D_ANSI_SOURCE
 
 LIB_HEADERS := $(wildcard lib/*.h)
 
-LIB_SRC := lib/aligned_malloc.c lib/x86_cpu_features.c
+LIB_SRC :=
 LIB_SRC_CXX := lib/deflate_decompress.cpp
 ifndef DISABLE_GZIP
     LIB_SRC += lib/gzip_decompress.c
