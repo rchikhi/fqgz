@@ -137,6 +137,8 @@ struct libdeflate_decompressor {
 
 	u32 offset_decode_table[OFFSET_ENOUGH];
 
+    libdeflate_decompressor *restrict static_decompressor;
+
 	u16 working_space[2 * (DEFLATE_MAX_CODEWORD_LEN + 1) +
 			  DEFLATE_MAX_NUM_SYMS];
 };
@@ -1767,6 +1769,7 @@ inline bool do_uncompressed(InputStream& in_stream, OutWindow& out, const might&
 template<typename OutWindow, typename might=ShouldSucceed>
 inline bool do_block(struct libdeflate_decompressor * restrict main_d, InputStream& in_stream, OutWindow& out, const might& might_tag={})
 {
+    libdeflate_decompressor *restrict cur_d;
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
 
@@ -1784,7 +1787,8 @@ inline bool do_block(struct libdeflate_decompressor * restrict main_d, InputStre
     /* BTYPE: 2 bits  */
     switch(in_stream.pop_bits(2)) {
     case DEFLATE_BLOCKTYPE_DYNAMIC_HUFFMAN:
-        ret = prepare_dynamic(d, in_stream);
+        ret = prepare_dynamic(main_d, in_stream, might_tag);
+        cur_d = main_d;
         if (might::fail_if(!ret))
             return false;
         break;
@@ -1795,9 +1799,8 @@ inline bool do_block(struct libdeflate_decompressor * restrict main_d, InputStre
         break;
 
     case DEFLATE_BLOCKTYPE_STATIC_HUFFMAN:
-        ret = prepare_static(d);
-        if (!ret)
-            return false;
+        //prepare_static(d);
+        cur_d = main_d->static_decompressor;
         break;
 
     default:
@@ -1812,13 +1815,12 @@ inline bool do_block(struct libdeflate_decompressor * restrict main_d, InputStre
         /* Decode a litlen symbol.  */
         in_stream.ensure_bits<DEFLATE_MAX_LITLEN_CODEWORD_LEN>();
         //FIXME: entry should be const
-        u32 entry = d->u.litlen_decode_table[in_stream.bits(LITLEN_TABLEBITS)];
+        u32 entry = cur_d->u.litlen_decode_table[in_stream.bits(LITLEN_TABLEBITS)];
         if (entry & HUFFDEC_SUBTABLE_POINTER) {
             /* Litlen subtable required (uncommon case)  */
             in_stream.remove_bits(LITLEN_TABLEBITS);
-            entry = d->u.litlen_decode_table[
-                    ((entry >> HUFFDEC_RESULT_SHIFT) & 0xFFFF) +
-                    in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
+            entry = cur_d->u.litlen_decode_table[ ((entry >> HUFFDEC_RESULT_SHIFT) & 0xFFFF)
+                                                  + in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
         }
         in_stream.remove_bits(entry & HUFFDEC_LENGTH_MASK);
         //PRINT_DEBUG("in_stream position %x\n",in_stream.in_next);
@@ -1858,23 +1860,24 @@ inline bool do_block(struct libdeflate_decompressor * restrict main_d, InputStre
                 if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH))
                 {
                     return out.notify_end_block(in_stream); // Block done
-                } else {
-                        out.flush();
-                        assert(length <= out.available());
+                } else { // Needs flushing
+                    if(unlikely(out.flush() == 0)) {
+                        return false;
+                    }
+                    assert(length <= out.available());
                 }
         }
-        assert(length > 0); // length == 0 => EOB case was handled
+        assert(length > 0); // length == 0 => EOB case should be handled here
 
         // if we end up here, it means we're at a match
 
         /* Decode the match offset.  */
-        entry = d->offset_decode_table[in_stream.bits(OFFSET_TABLEBITS)];
+        entry = cur_d->offset_decode_table[in_stream.bits(OFFSET_TABLEBITS)];
         if (entry & HUFFDEC_SUBTABLE_POINTER) {
                 /* Offset subtable required (uncommon case)  */
                 in_stream.remove_bits(OFFSET_TABLEBITS);
-                entry = d->offset_decode_table[
-                        ((entry >> HUFFDEC_RESULT_SHIFT) & 0xFFFF) +
-                        in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
+                entry = cur_d->offset_decode_table[ ((entry >> HUFFDEC_RESULT_SHIFT) & 0xFFFF) +
+                                                    + in_stream.bits(entry & HUFFDEC_LENGTH_MASK)];
         }
         in_stream.remove_bits(entry & HUFFDEC_LENGTH_MASK);
         entry >>= HUFFDEC_RESULT_SHIFT;
@@ -2058,7 +2061,10 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 LIBDEFLATEAPI struct libdeflate_decompressor *
 libdeflate_alloc_decompressor(void)
 {
-	return new libdeflate_decompressor();
+    auto d = new libdeflate_decompressor();
+    d->static_decompressor = new libdeflate_decompressor();
+    prepare_static(d->static_decompressor);
+    return d;
 }
 
 LIBDEFLATEAPI struct libdeflate_decompressor *
@@ -2070,5 +2076,6 @@ libdeflate_copy_decompressor(libdeflate_decompressor* d)
 LIBDEFLATEAPI void
 libdeflate_free_decompressor(struct libdeflate_decompressor *d)
 {
+    delete d->static_decompressor;
 	delete d;
 }
