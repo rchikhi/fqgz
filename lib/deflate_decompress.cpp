@@ -1298,22 +1298,22 @@ public:
     bool check_ascii() {
         unsigned start = has_dummy_32k ? (1<<15) : 0;
         unsigned dec_size = size() - start;
-        if(dec_size < 1024) { // Required decoded size to properly assess block synchronization
+        if(dec_size < (5UL<<10)) { // 5K: Required decoded size to properly assess block synchronization
             return false;
         }
 
         unsigned ascii_found = 0;
         for(unsigned i = start ; i < size() ; i++) {
             unsigned char c = buffer[i];
-            if(c > '~') {
+            if(c > byte('~') || c < byte('\t')) {
                 return false;
             }
             if(c != '?') {
-                ascii_found++;
+                return true;
             }
         }
 
-        return ascii_found >= dec_size/4;
+        return true; // If no literal were emitted in the first block
     }
 
     // make sure the buffer contains at least something that looks like fastq
@@ -1871,9 +1871,13 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
         size_t block_inpos = in_stream.position();
-        bool went_fine = do_block(d, in_stream, out_window, is_final_block);
+        in_stream.ensure_bits<1>();
+        bool went_fine = aligned || in_stream.bits(1) == 0;
+        if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
-            went_fine &= out_window.check_ascii();
+            went_fine = out_window.size() > (1UL << 15) + (10UL << 10);
+            if(went_fine) went_fine = out_window.check_ascii();
+            //if(went_fine) went_fine = out_window.check_buffer_fastq(false);
             if(went_fine) {
                 PRINT_DEBUG("First sync block at %d %d\n", in_stream.position(), in_stream.position_bits());
             }
