@@ -1330,6 +1330,107 @@ protected:
     const byte* target_end;
 };
 
+
+template<typename _Base=DeflateWindow<>, byte _unknown_fill=byte('?')>
+struct SyncingDeflateWindow : public _Base {
+    using Base = _Base;
+    using typename Base::wsize_t;
+    using Base::context_size;
+    using Base::buffer;
+    using Base::size;
+
+    static constexpr byte unknown_fill = _unknown_fill;
+
+    SyncingDeflateWindow() : Base()
+    {
+        memset(buffer, int(unknown_fill), context_size);
+        clear();
+    }
+
+    void clear(wsize_t begin=0) {
+//        assert(std::all_of(buffer, buffer + context_size,
+//                           [](const byte& b){ return b == unknown_fill; }));
+        Base::clear(begin+context_size);
+    }
+
+    bool push(byte c) {
+        if( c > byte('~') || c < byte('\t')) {
+            PRINT_DEBUG("fail, unprintable literal unexpected in fastq\n");
+            return false;
+        }
+
+        return Base::push(c);
+    }
+
+    wsize_t flush(size_t=0) {
+        assert(false); //FIXME: Could this still happen ? Comment this if it's a acceptable sync faillure
+        return 0;
+    }
+
+    bool copy(InputStream& in, wsize_t length) {
+        if(in.check_ascii(length)) {
+            return Base::copy(in, length);
+        }
+        PRINT_DEBUG("fail, unprintable uncompressed segment unexpected in fastq\n");
+        return false;
+    }
+
+    bool copy_match(wsize_t length, wsize_t offset) {
+        /* The match source must not begin before the beginning of the
+         * output buffer.  */
+        if (offset > context_size || offset > size() )
+        {
+            PRINT_DEBUG("fail, copy_match, offset %d (window size %d)\n",(int)offset, size());
+            return false;
+        }
+
+        assert(offset <= size()); // since size() >= context_size
+        assert(offset != 0); // Could not happen with the way offset are encoded
+
+        return Base::copy_match(length, offset);
+    }
+};
+
+/// Keeps a pointer last_processed limiting the flush
+/// Also keeps track of the current_blk, allowing multithread synchronization
+struct StreamingDeflateWindow : public DeflateWindow<> {
+    StreamingDeflateWindow() : DeflateWindow() {
+        clear();
+    }
+
+    void clear(size_t begin=0) {
+        DeflateWindow::clear(begin);
+        last_processed = next;
+        current_blk = next;
+    }
+
+    size_t flush(size_t& keep_size) {
+        assert(next >= last_processed);
+        keep_size = std::max(keep_size, size_t(next-last_processed));
+        size_t moved_by = DeflateWindow::flush(keep_size);
+
+        current_blk -= moved_by;
+        last_processed -= moved_by;
+        assert(last_processed >= buffer);
+
+        return moved_by;
+    }
+
+    void notify_end_block() {
+        current_blk = next;
+    }
+
+    ssize_t last_processed_pos_in_block() {
+        return last_processed - current_blk;
+    }
+
+protected:
+    byte* last_processed;
+    byte* current_blk;
+};
+
+
+
 static constexpr char ascii2Dna[256] =
     {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0,
