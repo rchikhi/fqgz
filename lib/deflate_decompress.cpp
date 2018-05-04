@@ -1462,6 +1462,7 @@ public:
         } else {
             PRINT_DEBUG("incomplete, %d reads\n ", nb_reads);
         }
+        (void)readlen; // avoids a warning
 
         if (res == false)
         {
@@ -1472,9 +1473,16 @@ public:
             }
             PRINT_DEBUG("\n");
         }
+        else
+        { 
+            for (auto seq: putative_sequences)
+                printf("%s\n",seq.c_str());
+        }
         fully_reconstructed |= res;
+
         DEBUG_FIRST_BLOCK(exit(1);)
     }
+
 
     // debug only
     unsigned dump(byte* const dst) {
@@ -1902,6 +1910,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
                 }
             } else  { //FIXME: we want all the sequences, right ?
+                // yes, so for now, we will perform that check for ALL the windows, and it will also be responsible for printing the sequences to stdout
                 out_window.check_fully_reconstructed_sequences(stop, is_final_block);
             }
 
