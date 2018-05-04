@@ -24,8 +24,9 @@
  *	- bitsleft: number of bits in 'bitbuf' that are valid.
  *
  */
-class InputStream {
-public: //protected: //FIXME
+class InputStream
+{
+  public: // protected: //FIXME
     /*
      * The type for the bitbuffer variable ('bitbuf' described above).  For best
      * performance, this should have size equal to a machine word.
@@ -37,11 +38,11 @@ public: //protected: //FIXME
     using bitbuf_size_t = uint_fast32_t;
 
     /** State */
-    const byte *const begin;
-    const byte *restrict in_next; /// Read pointer
-    const byte *restrict const in_end; /// Adress of the byte after input
-    bitbuf_t bitbuf = bitbuf_t(0); /// Bit buffer
-    bitbuf_size_t bitsleft = 0; /// Number of valid bits in the bit buffer
+    const byte* const begin;
+    const byte* restrict in_next;      /// Read pointer
+    const byte* restrict const in_end; /// Adress of the byte after input
+    bitbuf_t bitbuf = bitbuf_t(0);     /// Bit buffer
+    bitbuf_size_t bitsleft = 0;        /// Number of valid bits in the bit buffer
     bitbuf_size_t overrun_count = 0;
     bool reached_final_block = false;
 
@@ -65,8 +66,7 @@ public: //protected: //FIXME
     /**
      * Does the bitbuffer variable currently contain at least 'n' bits?
      */
-    inline bool have_bits(size_t n) const
-    { return bitsleft >= n; }
+    inline bool have_bits(size_t n) const { return bitsleft >= n; }
 
     /**
      * Fill the bitbuffer variable by reading the next word from the input buffer.
@@ -76,7 +76,8 @@ public: //protected: //FIXME
      * most efficient on little-endian architectures that support fast unaligned
      * access, such as x86 and x86_64.
      */
-    inline void fill_bits_wordwise() {
+    inline void fill_bits_wordwise()
+    {
         bitbuf |= get_unaligned_leword(in_next) << bitsleft;
         in_next += (bitbuf_length - bitsleft) >> 3;
         bitsleft += (bitbuf_length - bitsleft) & ~7;
@@ -98,25 +99,29 @@ public: //protected: //FIXME
      * should run a checksum against the uncompressed data if they wish to detect
      * corruptions.
      */
-    inline void fill_bits_bytewise() {
+    inline void fill_bits_bytewise()
+    {
         do {
-               if (likely(in_next != in_end))
-                       bitbuf |= bitbuf_t(*in_next++) << bitsleft;
-               else
-                       overrun_count++;
-               bitsleft += 8;
+            if (likely(in_next != in_end))
+                bitbuf |= bitbuf_t(*in_next++) << bitsleft;
+            else
+                overrun_count++;
+            bitsleft += 8;
         } while (bitsleft <= bitbuf_length - 8);
     }
 
-public:
-    InputStream(const byte* in, size_t len) :
-        begin(in), in_next(in), in_end(in + len)
+  public:
+    InputStream(const byte* in, size_t len)
+      : begin(in)
+      , in_next(in)
+      , in_end(in + len)
     {}
 
     InputStream(const InputStream&) = default;
 
     /// states asignments for the same stream (for backtracking)
-    InputStream& operator=(const InputStream& from) {
+    InputStream& operator=(const InputStream& from)
+    {
         assert(begin == from.begin && in_end == from.in_end);
 
         in_next = from.in_next;
@@ -130,7 +135,8 @@ public:
     InputStream(InputStream&&) = default;
     InputStream& operator=(InputStream&&) = default;
 
-    size_t size() const {
+    size_t size() const
+    {
         assert(in_end >= begin);
         return in_end - begin;
     }
@@ -138,30 +144,29 @@ public:
     /** Remaining available bytes
      * @note align_input() should be called first in order to get accurate readings (or use available_bits() / 8)
      */
-    size_t available() const {
+    size_t available() const
+    {
         assert(in_end >= in_next);
         return in_end - in_next;
     }
 
     /// Remaining available bits
-    size_t available_bits() const {
-        return 8*available() + bitsleft;
-    }
+    size_t available_bits() const { return 8 * available() + bitsleft; }
 
     /** Position in the stream in bytes
      * @note align_input() should be called first in order to get accurate readings (or use position_bits() / 8)
      */
-    size_t position() const {
+    size_t position() const
+    {
         assert(in_next >= begin);
         return in_next - begin;
     }
 
-    size_t position_bits() const {
-        return 8*position() - bitsleft;
-    }
+    size_t position_bits() const { return 8 * position() - bitsleft; }
 
     /// Seek forward
-    void skip(size_t offset) {
+    void skip(size_t offset)
+    {
         align_input();
         assert(in_next + offset < in_end);
         in_next += offset;
@@ -172,16 +177,17 @@ public:
      * present in the bitbuffer variable.  'n' cannot be too large; see MAX_ENSURE
      * and CAN_ENSURE().
      */
-    template <bitbuf_size_t n>
-    bool ensure_bits() {
+    template<bitbuf_size_t n>
+    bool ensure_bits()
+    {
         static_assert(n <= bitbuf_max_ensure, "Bit buffer is too small");
         if (!have_bits(n)) {
-                if(unlikely(available() < 1))
-                    return false; // This is not acceptable overrun
-                if (likely(available() >= sizeof(bitbuf_t)))
-                    fill_bits_wordwise();
-                else
-                    fill_bits_bytewise();
+            if (unlikely(available() < 1))
+                return false; // This is not acceptable overrun
+            if (likely(available() >= sizeof(bitbuf_t)))
+                fill_bits_wordwise();
+            else
+                fill_bits_bytewise();
         }
         return true;
     }
@@ -189,15 +195,17 @@ public:
     /**
      * Return the next 'n' bits from the bitbuffer variable without removing them.
      */
-    u32 bits(bitbuf_size_t n) const {
+    u32 bits(bitbuf_size_t n) const
+    {
         assert(bitsleft >= n);
-        return  u32(bitbuf & ((u32(1) << n) - 1));
+        return u32(bitbuf & ((u32(1) << n) - 1));
     }
 
     /**
      * Remove the next 'n' bits from the bitbuffer variable.
      */
-    inline void remove_bits(bitbuf_size_t n) {
+    inline void remove_bits(bitbuf_size_t n)
+    {
         assert(bitsleft >= n);
         bitbuf >>= n;
         bitsleft -= n;
@@ -206,7 +214,8 @@ public:
     /**
      * Remove and return the next 'n' bits from the bitbuffer variable.
      */
-    inline u32 pop_bits(bitbuf_size_t n) {
+    inline u32 pop_bits(bitbuf_size_t n)
+    {
         u32 tmp = bits(n);
         remove_bits(n);
         return tmp;
@@ -221,11 +230,12 @@ public:
      * in what would be the "current" byte if we were reading one byte at a time can
      * be actually discarded.
      */
-    inline void align_input() {
+    inline void align_input()
+    {
         assert(overrun_count <= (bitsleft >> 3));
         in_next -= (bitsleft >> 3) - overrun_count;
         // was:
-        //in_next -= (bitsleft >> 3) - std::min(overrun_count, bitsleft >> 3);
+        // in_next -= (bitsleft >> 3) - std::min(overrun_count, bitsleft >> 3);
         bitbuf = 0;
         bitsleft = 0;
     }
@@ -234,40 +244,41 @@ public:
      * Read a 16-bit value from the input.  This must have been preceded by a call
      * to ALIGN_INPUT(), and the caller must have already checked for overrun.
      */
-    inline u16 pop_u16() {
+    inline u16 pop_u16()
+    {
         assert(available() >= 2);
         u16 tmp = get_unaligned_le16(in_next);
         in_next += 2;
         return tmp;
     }
 
-
     /**
-      * Copy n bytes to the ouput buffer. The input buffer must be aligned with a
-      * call to align_input()
-      */
-    inline void copy(byte* restrict out, size_t n) {
+     * Copy n bytes to the ouput buffer. The input buffer must be aligned with a
+     * call to align_input()
+     */
+    inline void copy(byte* restrict out, size_t n)
+    {
         assert(available() >= n);
         memcpy(out, in_next, n);
         in_next += n;
     }
 
     /**
-      * Checks that the lenght next bytes are ascii
-      * (for checked copy()ies of uncompressed blocks)
-      */
-    inline bool check_ascii(size_t n) {
-        if(unlikely(n > available()))
+     * Checks that the lenght next bytes are ascii
+     * (for checked copy()ies of uncompressed blocks)
+     */
+    inline bool check_ascii(size_t n)
+    {
+        if (unlikely(n > available()))
             return false;
 
-        for(size_t i=0 ; i < n ; i++) {
+        for (size_t i = 0; i < n; i++) {
             byte c = in_next[i];
-            if(c > byte('c') || c < byte('\t'))
+            if (c > byte('c') || c < byte('\t'))
                 return false;
         }
         return true;
     }
-
 };
 
 #endif // INPUT_STREAM_HPP

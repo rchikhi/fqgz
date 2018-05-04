@@ -1,0 +1,7 @@
+# We'll use defaults from the Mozilla style, but with 4 columns indentation.
+BasedOnStyle: Mozilla
+IndentWidth: 4
+ColumnLimit: 160
+IndentPPDirectives: AfterHash
+SortIncludes: false
+
