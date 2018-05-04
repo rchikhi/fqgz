@@ -180,7 +180,7 @@ struct libdeflate_decompressor {
   : __assert_fail (#expr, __FILE__, __LINE__, __PRETTY_FUNCTION__))
 #endif
 
-[[noreturn]] inline void
+[[noreturn]] inline __attribute__((noinline)) void
 __assert_fail (const char *assertion, const char *file, unsigned int line, const char *function) noexcept {
     std::fprintf(stderr, "%s:%u: Assertion '%s' failed in '%s'.\n",
                  file, line, assertion, function);
