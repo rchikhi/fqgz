@@ -53,11 +53,13 @@
 #include <string>
 
 #include <stdexcept>
+#include <pthread.h>
 
 #include "deflate_constants.h"
 #include "unaligned.h"
 
 #include "libdeflate.h"
+#include "synchronizer.hpp"
 
 #ifdef DEB
 #define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
@@ -176,8 +178,6 @@ struct libdeflate_decompressor {
  */
 typedef machine_word_t bitbuf_t;
 
-
-#undef NDEBUG //FIXME: forced debug
 
 #ifdef NDEBUG
 #define assert(expr)							\
@@ -1045,7 +1045,7 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
     return true;
 }
 
-#define output_buffer_bits 20 // FIXME: constructor parameter
+#define output_buffer_bits 22 // FIXME: constructor parameter
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
@@ -1152,13 +1152,16 @@ public:
     }
 
     /// Move the 32K context to the start of the buffer
-    void flush(size_t window_size=1UL<<15) {
-        assert(size() > window_size);
+    size_t flush(size_t window_size=1UL<<15) {
+        assert(size() >= window_size);
         assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
         memcpy(buffer, next - window_size, window_size);
+        size_t moved_by = (next - window_size) - buffer;
 
         // update next pointer
         next = buffer + window_size;
+
+        return moved_by;
     }
 
 protected:
@@ -1180,7 +1183,7 @@ public:
         target(target), target_start(target), target_end(target_end)
     {}
 
-    void flush(size_t start=0, size_t window_size=1UL<<15) {
+    size_t flush(size_t start=0, size_t window_size=1UL<<15) {
         assert(size() >= window_size);
         size_t evict_size = size() - window_size - start;
         assert(buffer + start + evict_size == next - window_size);
@@ -1190,7 +1193,7 @@ public:
         target += evict_size;
 
         // Then move the context to the start
-        DeflateWindow::flush(window_size);
+        return DeflateWindow::flush(window_size);
     }
 
     size_t get_evicted_length() {
@@ -1240,6 +1243,7 @@ public:
         assert(has_dummy_32k);
 
         next = buffer+(1<<15);
+        current_blk = next;
 
         for (int i = 0; i < (1<<15); i ++)
         {
@@ -1307,22 +1311,19 @@ public:
     bool check_ascii() {
         unsigned start = has_dummy_32k ? (1<<15) : 0;
         unsigned dec_size = size() - start;
-        if(dec_size < 1024) { // Required decoded size to properly assess block synchronization
+        if(dec_size < (5UL<<10)) { // 5K: Required decoded size to properly assess block synchronization
             return false;
         }
 
         unsigned ascii_found = 0;
         for(unsigned i = start ; i < size() ; i++) {
             unsigned char c = buffer[i];
-            if(c > '~') {
+            if(c > byte('~') || c < byte('\t')) {
                 return false;
-            }
-            if(c != '?') {
-                ascii_found++;
             }
         }
 
-        return ascii_found >= dec_size/4;
+        return true; // If no literal were emitted in the first block
     }
 
     // currently unused, replaced by check_ascii()
@@ -1377,7 +1378,9 @@ public:
     }
 
     // decide if the buffer contains all the fastq sequences with no ambiguities in them
-    void check_fully_reconstructed_sequences(unsigned review_size=1<<15)
+    // initially was made to be applied to a context
+    // but during my tests, is applied to whole block to print sequences
+    void check_fully_reconstructed_sequences(synchronizer* stop, bool last_block, unsigned review_size=/*1<<15*/ 0 /* review everything*/)
     {
         if (size() < review_size)
         {
@@ -1386,14 +1389,23 @@ public:
             return;
         }
 
-        // when this function is called, we're at the start of a block, so here's the context start
-        long int start_pos =  size() - review_size;
+        // when this function is called, we're at the start of a new block, so let's determine where to start inspecting
+        long int start_pos = 0;
+        if (review_size > 0)
+            start_pos = size() - review_size;
+        else // review everything
+            start_pos = has_dummy_32k ? 1UL<<15 : 0;
 
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
-        std::string current_sequence = "";
+        std::string current_sequence = ""; current_sequence.reserve(256);
+        unsigned current_sequence_pos = start_pos;
         for (long int i = start_pos; i < next-buffer; i ++)
         {
+            bool after_current_block = i >= current_blk - buffer; // FIXME: sync parser such that this is always true
+            if(stop != nullptr && last_block && after_current_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
+                 break; // We reached the first sequence decoded by the next thread
+
             unsigned char c = buffer[i];
             if (ascii2Dna[c] > 0)
                 current_sequence += c;
@@ -1402,10 +1414,16 @@ public:
                 if ((c == '\r' || c == '\n' || c == '?')  //(buffer_counts[i] > 1000))  // actually not a good heursitic
                         && (current_sequence.size() > 30)) // heuristics here, assume reads at > 30 bp
                 {
+                    // Record the position of the first decoded sequence relative to the block start
+                    // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
+                    if(after_current_block) // FIXME: sync parser such that is always true
+                        first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
+
                     putative_sequences.push_back(current_sequence);
                     // note this code may capture stretches of quality values too
                 }
                 current_sequence = "";
+                current_sequence_pos = i+1;
             }
         }
         if (current_sequence.size() > 30)
@@ -1455,27 +1473,36 @@ public:
             }
         }
 
+
 #ifdef DEB
-        pretty_print();
+        //pretty_print();
 #endif
-        fprintf(stderr,"check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
-        if (res)
-            fprintf(stderr,"fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
-        else
-            fprintf(stderr,"incomplete, %d reads\n ", nb_reads);
+        PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
+        if (res) {
+            PRINT_DEBUG("fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
+        } else {
+            PRINT_DEBUG("incomplete, %d reads\n ", nb_reads);
+        }
 
         if (res == false)
         {
             for (int i = 0; i < max_histogram; i++)
             {
                 if (histogram[i] > 0)
-                    fprintf(stderr,"histogram[%d]=%d ",i,histogram[i]);
+                    PRINT_DEBUG("histogram[%d]=%d ",i,histogram[i]);
             }
-            fprintf(stderr,"\n");
+            PRINT_DEBUG("\n");
         }
-        fully_reconstructed = res;
+        else
+        { 
+            for (auto seq: putative_sequences)
+                printf("%s\n",seq.c_str());
+        }
+        fully_reconstructed |= res;
+
         DEBUG_FIRST_BLOCK(exit(1);)
     }
+
 
     // debug only
     unsigned dump(byte* const dst) {
@@ -1552,20 +1579,24 @@ public:
     }
 
     /* called when the window is full.
-     * note: not necessarily at the end of a block */
+     * note: not necessarily at the end of a block.
+    * actually: in some version of the code, it Is at the end of the block*/
     void flush() {
         constexpr size_t window_size = 1UL<<15;
-
+        fprintf(stderr,"flushing block!!\n");
         // update counts
         memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
         memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
 
-        if(output_to_target) {
+        unsigned moved_by;
+        if(false && output_to_target) {
             size_t start = has_dummy_32k ? 1UL<<15 : 0;
-            FlushableDeflateWindow::flush(start);
+            moved_by = FlushableDeflateWindow::flush(start);
         } else {
-           DeflateWindow::flush(); // Only move the context to the begining
+           moved_by = DeflateWindow::flush(); // Only move the context to the begining
         }
+
+        current_blk -= moved_by;
 
         has_dummy_32k = false;
     }
@@ -1578,10 +1609,16 @@ public:
                     nb_back_refs_in_block,
                     len_back_refs_in_block,
                     1.0*len_back_refs_in_block/nb_back_refs_in_block);
+
+        current_blk = next;
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
         block_size = 0;
+        flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
+
+    byte* current_blk;
+    unsigned first_seq_block_pos = ~0U; /// Position of the first sequence relative to the current block start
 
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
@@ -1597,6 +1634,8 @@ public:
     // initially backref_origins[1<<15 - 1]=1, backref_origins[1<<15 - 2]=2, etc
     uint16_t* backref_origins;
 };
+
+
 
 
 bool do_uncompressed(InputStream& in_stream, InstrDeflateWindow& out) {
@@ -1698,7 +1737,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                     PRINT_DEBUG("first block is asking to flush already, probably bad\n");
                     return false;
                 }
-                fprintf(stderr,"flushing now\n");
+                PRINT_DEBUG("flushing now\n");
                 out.flush();
             }
 
@@ -1732,7 +1771,6 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         if (unlikely(length - 1 >= out.available())) {
                 if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH))
                 {
-                    out.notify_end_block(is_final_block, in_stream);
                     return true; // Block done
                 } else {
                         out.flush();
@@ -1775,9 +1813,9 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
 }
 
 /* if we need to stop 20 blocks after some point, and that point has been reached, setup a counter */
-bool handle_until(signed long long until, signed int &until_counter, long long position)
+bool handle_until(size_t until, int &until_counter, size_t position)
 {
-    if (until > -1 && until_counter == -1 && position > until)
+    if (until_counter == -1 && position > until)
         until_counter = 20;
     if (until_counter > 0)
     {
@@ -1814,8 +1852,9 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 			      const byte * restrict const in, size_t in_nbytes,
 			      byte * restrict const out, size_t out_nbytes_avail,
 			      size_t *actual_out_nbytes_ret,
-                  int skip,
-                  signed long long until)
+                  synchronizer* stop,  // indicating where to stop
+                  synchronizer* prev_sync, // for passing our first extracted sequence coordinate to the previous thread
+                  size_t skip, size_t until)
 {
     InputStream in_stream(in, in_nbytes);
 
@@ -1832,6 +1871,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     signed int until_counter = -1;
     int skip_counter = 0;
 
+    fprintf(stderr, "Thread %lu started with a skip of %lu bytes\n", pthread_self(), skip);
+
     /* Skipping user-set amount of bytes, after the header of course */
     if (skip)
     {
@@ -1844,14 +1885,17 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     InputStream backup_in(in_stream);
 
     do {
-
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
-        bool went_fine = false;
 
-        went_fine = do_block(d, in_stream, out_window, is_final_block);
+        size_t block_inpos = in_stream.position();
+        in_stream.ensure_bits<1>();
+        bool went_fine = aligned || in_stream.bits(1) == 0;
+        if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
-            went_fine &= out_window.check_ascii();
+            went_fine = out_window.size() > (1UL << 15) + (10UL << 10);
+            if(went_fine) went_fine = out_window.check_ascii();
+            //if(went_fine) went_fine = out_window.check_buffer_fastq(false);
             if(went_fine) {
                 PRINT_DEBUG("First sync block at %d %d\n", in_stream.position(), in_stream.position_bits());
             }
@@ -1870,12 +1914,29 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                 break;
             handle_skip(skip_counter, out_window);
 
+            if(stop != nullptr && !is_final_block) {
+                is_final_block |= stop->caught_up_block(block_inpos);
+                if(is_final_block)
+                    fprintf(stderr, "thread %lu stoped at %lu\n", pthread_self(), block_inpos);
+            }
+
             if (skip_counter == 0 && out_window.fully_reconstructed == false)
             {
-                out_window.check_fully_reconstructed_sequences(); // see if we have uncertainties in nucleotides
-                if (out_window.fully_reconstructed)
+                out_window.check_fully_reconstructed_sequences(stop, is_final_block); // see if we have uncertainties in nucleotides
+                if (out_window.fully_reconstructed) {
+                    if(prev_sync != nullptr) {
+                        fprintf(stderr, "Thread %lu found it's first sequence in block %lu at position %u\n",
+                                pthread_self(), block_inpos, out_window.first_seq_block_pos);
+                        prev_sync->signal_first_decoded_sequence(block_inpos, out_window.first_seq_block_pos);
+                    }
                     fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
+                }
+            } else  { //FIXME: we want all the sequences, right ?
+                // yes, so for now, we will perform that check for ALL the windows, and it will also be responsible for printing the sequences to stdout
+                out_window.check_fully_reconstructed_sequences(stop, is_final_block);
             }
+
+            out_window.notify_end_block(is_final_block, in_stream);
         }
         else
         {
@@ -1916,6 +1977,12 @@ LIBDEFLATEAPI struct libdeflate_decompressor *
 libdeflate_alloc_decompressor(void)
 {
 	return new libdeflate_decompressor();
+}
+
+LIBDEFLATEAPI struct libdeflate_decompressor *
+libdeflate_copy_decompressor(libdeflate_decompressor* d)
+{
+    return new libdeflate_decompressor(*d);
 }
 
 LIBDEFLATEAPI void

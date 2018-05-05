@@ -45,11 +45,12 @@ struct options {
 	bool force;
 	bool keep;
 	const tchar *suffix;
-    int skip;
-    signed long long until;
+    unsigned nthreads;
+    size_t skip;
+    size_t until;
 };
 
-static const tchar *const optstring = T("1::2::3::4::5::6::7::8::9::cdfhknS:s:r:u:V");
+static const tchar *const optstring = T("1::2::3::4::5::6::7::8::9::cdfhknS:s:t:u:V");
 
 static void
 show_usage(FILE *fp)
@@ -67,6 +68,7 @@ show_usage(FILE *fp)
 "  -f        overwrite existing output files\n"
 "  -h        print this help\n"
 "  -k        don't delete input files\n"
+"  -t n      use n threads\n"
 "  -S SUF    use suffix SUF instead of .gz\n"
 "  -s BYTES  skip BYTES of compressed data, then skip 20 blocks, then decompress the rest\n"
 "  -u BYTES  stop 20 block after position BYTES in compressed data\n"
@@ -125,8 +127,8 @@ load_u32_gzip(const byte *p)
 
 static int
 do_decompress(struct libdeflate_decompressor *decompressor,
-	      struct file_stream *in, struct file_stream *out, int skip,
-          signed long long until)
+          struct file_stream *in, struct file_stream *out, unsigned nthreads, size_t skip,
+          size_t until)
 {
 	const byte *compressed_data = static_cast<const byte*>(in->mmap_mem);
 	size_t compressed_size = in->mmap_size;
@@ -144,21 +146,21 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 
 	uncompressed_size = load_u32_gzip(&compressed_data[compressed_size - 4]);
 
-	uncompressed_data = new byte[uncompressed_size];
-	if (uncompressed_data == NULL) {
-		msg("%" TS ": file is probably too large to be processed by this "
-		    "program", in->name);
-		ret = -1;
-		goto out;
-	}
+//	uncompressed_data = new byte[uncompressed_size];
+//	if (uncompressed_data == NULL) {
+//		msg("%" TS ": file is probably too large to be processed by this "
+//		    "program", in->name);
+//		ret = -1;
+//		goto out;
+//	}
 
 
 	result = libdeflate_gzip_decompress(decompressor,
 					    compressed_data,
 					    compressed_size,
 					    uncompressed_data,
-					    uncompressed_size, &actual_uncompressed_size, skip, 
-                        until);
+                        uncompressed_size, &actual_uncompressed_size, nthreads,
+                        skip, until);
 
 	if (result == LIBDEFLATE_INSUFFICIENT_SPACE) {
 		msg("%" TS ": file corrupt or too large to be processed by this "
@@ -175,7 +177,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 
 	//ret = full_write(out, uncompressed_data, actual_uncompressed_size);
 out:
-	delete uncompressed_data;
+    // delete uncompressed_data;
 	return ret;
 }
 
@@ -332,7 +334,7 @@ decompress_file(struct libdeflate_decompressor *decompressor, const tchar *path,
 	if (ret != 0)
 		goto out_close_out;
 
-	ret = do_decompress(decompressor, &in, &out, options->skip, options->until);
+    ret = do_decompress(decompressor, &in, &out, options->nthreads, options->skip, options->until);
 	if (ret != 0)
 		goto out_close_out;
 
@@ -372,8 +374,9 @@ tmain(int argc, tchar *argv[])
 	options.force = false;
 	options.keep = false;
 	options.suffix = T(".gz");
+    options.nthreads = 1;
 	options.skip = 0;
-	options.until = -1;
+    options.until = SIZE_MAX;
 
 	while ((opt_char = tgetopt(argc, argv, optstring)) != -1) {
 		switch (opt_char) {
@@ -404,12 +407,16 @@ tmain(int argc, tchar *argv[])
 				return 1;
 			}
 			break;
+        case 't':
+            options.nthreads = atoi(toptarg);
+            fprintf(stderr,"using %d threads for decompression (experimental)\n",options.nthreads);
+            break;
 		case 's':
-			options.skip = atoi(toptarg);
+            options.skip = strtoul(toptarg, NULL, 10);
             fprintf(stderr,"skipping %d bytes (experimental)\n",options.skip);
 			break;
 		case 'u':
-			options.until = atoi(toptarg);
+            options.until = strtoul(toptarg, NULL, 10);
             fprintf(stderr,"decoding until 20 blocks after compressed position %lld\n",options.until);
 			break;
 
