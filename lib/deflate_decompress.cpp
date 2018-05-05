@@ -61,8 +61,8 @@
 #include "libdeflate.h"
 #include "synchronizer.hpp"
 
-#define PRINT_DEBUG(...) {}
-//#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
+//#define PRINT_DEBUG(...) {}
+#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
 #define DEBUG_FIRST_BLOCK(x) {}
 //#define DEBUG_FIRST_BLOCK(x) {x}
 
@@ -1039,7 +1039,7 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
     return true;
 }
 
-#define output_buffer_bits 20 // FIXME: constructor parameter
+#define output_buffer_bits 22 // FIXME: constructor parameter
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
@@ -1147,7 +1147,7 @@ public:
 
     /// Move the 32K context to the start of the buffer
     size_t flush(size_t window_size=1UL<<15) {
-        assert(size() > window_size);
+        assert(size() >= window_size);
         assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
         memcpy(buffer, next - window_size, window_size);
         size_t moved_by = (next - window_size) - buffer;
@@ -1366,7 +1366,9 @@ public:
     }
 
     // decide if the buffer contains all the fastq sequences with no ambiguities in them
-    void check_fully_reconstructed_sequences(synchronizer* stop, bool last_block, unsigned review_size=1<<15)
+    // initially was made to be applied to a context
+    // but during my tests, is applied to whole block to print sequences
+    void check_fully_reconstructed_sequences(synchronizer* stop, bool last_block, unsigned review_size=/*1<<15*/ 0 /* review everything*/)
     {
         if (size() < review_size)
         {
@@ -1375,8 +1377,12 @@ public:
             return;
         }
 
-        // when this function is called, we're at the start of a block, so here's the context start
-        long int start_pos =  size() - review_size;
+        // when this function is called, we're at the start of a new block, so let's determine where to start inspecting
+        long int start_pos = 0;
+        if (review_size > 0)
+            start_pos = size() - review_size;
+        else // review everything
+            start_pos = has_dummy_32k ? 1UL<<15 : 0;
 
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
@@ -1559,10 +1565,11 @@ public:
     }
 
     /* called when the window is full.
-     * note: not necessarily at the end of a block */
+     * note: not necessarily at the end of a block.
+    * actually: in some version of the code, it Is at the end of the block*/
     void flush() {
         constexpr size_t window_size = 1UL<<15;
-
+        fprintf(stderr,"flushing block!!\n");
         // update counts
         memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
         memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
@@ -1592,6 +1599,8 @@ public:
         current_blk = next;
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
+        
+        flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
 
     byte* current_blk;
@@ -1869,6 +1878,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     do {
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
+
 
         size_t block_inpos = in_stream.position();
         in_stream.ensure_bits<1>();
