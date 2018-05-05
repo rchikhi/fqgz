@@ -1382,6 +1382,18 @@ public:
         return (c == '\r' || c == '\n' || (c == '?' && buffer_counts[i] > 100));
     }
 
+    // we're at the end of a sequence,
+    void attempt_to_skip_quality_and_header(long int &i, int readlen)
+    {
+        i++; // skip the next \n
+        i += quality_header_length; // the quality + and the header
+        i++; // the \n after quality header
+        i += readlen;  // the quality seq
+        i++; // the \n after quality seq
+        i += header_length; // the header 
+        i++; // the \n after header
+    }
+
     // decide if the buffer contains all the fastq sequences with no ambiguities in them
     // initially was made to be applied to a context
     // but during my tests, is applied to whole block to print sequences
@@ -1411,19 +1423,21 @@ public:
         bool incomplete_context = false;
         int line_skip = 0; // used to skip some lines that are for sure header/quality
 
-        for (long int i = start_pos; i < next-buffer; i ++)
+        long int i = start_pos;
+
+        while (i < next-buffer)
         {
             bool after_current_block = i >= current_blk - buffer; // FIXME: sync parser such that this is always true
             if(stop != nullptr && last_block && after_current_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
             {
-                fprintf(stderr,"reached first seq decoded by next thread\n");
+                 fprintf(stderr,"reached first seq decoded by next thread\n");
                  break; // We reached the first sequence decoded by the next thread
             }
 
             unsigned char c = buffer[i];
             if (ascii2Dna[c] > 0 && (previous_char_is_separator || currently_parsing_dna))
             {
-                fprintf(stderr,"parsing dna char %c, so far %s\n",c,current_sequence.c_str());
+                //fprintf(stderr,"parsing dna char %c, so far %s\n",c,current_sequence.c_str());
                 current_sequence += c;
                 previous_char_is_separator = false;
                 currently_parsing_dna = true;
@@ -1433,24 +1447,27 @@ public:
                 bool is_separator = is_likely_separator(i);
                 if (is_separator)
                 {
-                    fprintf(stderr,"found separator %c and have parsed %s\n",c,current_sequence.c_str());
-                    if (currently_parsing_dna)
+                    if (currently_parsing_dna && current_sequence.size() > 40 /* avoid false stretches */)
                     {
                         // Record the position of the first decoded sequence relative to the block start
                         // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
                         if(after_current_block) // FIXME: sync parser such that is always true
                             first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
     
+                        fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
                         putative_sequences.push_back(current_sequence);
-                        // note this code may capture stretches of quality values too
+                        attempt_to_skip_quality_and_header(i, current_sequence.size());
                     }
                 }
                 else
                 {
-                    if (currently_parsing_dna)
+                    if (currently_parsing_dna && putative_sequences.size() >= 2 /* don't trust the very first sequence, we don't know if it's a qual or a seq*/ ) 
                     {
                         // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
-                        fprintf(stderr,"incomplete context, reached character %c after parsing %s\n",c,current_sequence.c_str());
+                        std::string prev = "none";
+                        if (putative_sequences.size() > 0)
+                            prev = putative_sequences[putative_sequences.size()-1];
+                        fprintf(stderr,"incomplete context, reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
                         incomplete_context = true;
                         break;
                     }
@@ -1458,10 +1475,10 @@ public:
                 current_sequence = "";
                 current_sequence_pos = i+1;
                 currently_parsing_dna = false;
-                previous_char_is_separator = is_separator;
             }
 
             previous_char_is_separator = is_likely_separator(i);
+            i++;
         }
         if (current_sequence.size() > 0)
             putative_sequences.push_back(current_sequence);
@@ -1470,6 +1487,10 @@ public:
 #ifdef DEB
         //pretty_print();
 #endif
+
+        if (nb_reads < 10) // heuristic
+            incomplete_context = true;
+
         PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (!incomplete_context) {
             PRINT_DEBUG("fully reconstructed %d reads\n", nb_reads); // continuation of heuristic
@@ -1617,6 +1638,10 @@ public:
     // Offsets in the primary unknown context window
     // initially backref_origins[1<<15 - 1]=1, backref_origins[1<<15 - 2]=2, etc
     uint16_t* backref_origins;
+
+    // some info to help fastq parsing
+    unsigned header_length;
+    unsigned quality_header_length;
 };
 
 
@@ -1829,6 +1854,15 @@ void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
     }
 }
 
+/* sets some parameters based on decompression of the first block
+ */
+void estimate_file_structure(unsigned &header_length, unsigned &quality_header_length)
+{
+    // TODO estimate them
+    header_length = 54;
+    quality_header_length=0;
+}
+
 // Original API:
 
 LIBDEFLATEAPI enum libdeflate_result
@@ -1846,6 +1880,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     byte * const out_end = out_next + out_nbytes_avail;
     InstrDeflateWindow out_window(out, out_end);
     InstrDeflateWindow backup_out(out, out_end);
+
+    estimate_file_structure(out_window.header_length, out_window.quality_header_length);
 
     // blocks counter
     int failed_decomp_counter = 0;
