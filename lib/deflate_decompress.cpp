@@ -1318,6 +1318,7 @@ public:
         for(unsigned i = start ; i < size() ; i++) {
             unsigned char c = buffer[i];
             if(c > byte('~') || c < byte('\t')) {
+                //fprintf(stderr,"non ascii found: %d\n",(unsigned int)c);
                 return false;
             }
         }
@@ -1722,6 +1723,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
     /* Decompressing a Huffman block (either dynamic or static)  */
     DEBUG_FIRST_BLOCK(fprintf(stderr,"trying to decode huffman block\n");)
 
+
     /* The main DEFLATE decode loop  */
     for (;;) {
         /* Decode a litlen symbol.  */
@@ -1910,7 +1912,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
         size_t block_inpos = in_stream.position();
         in_stream.ensure_bits<1>();
-        bool went_fine = aligned || in_stream.bits(1) == 0;
+        bool went_fine = true; // aligned || in_stream.bits(1) == 0; // FIXME Mael this check doesn't seem to work on many fastq files, e.g. /nvme//fastq/ERA992995-160825_D00261_0358_BC9JAVANXX_1_TP-D7-010_TP-D5-008_1.fastq.gz
         if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
             went_fine = out_window.size() > (1UL << 15) + (10UL << 10);
