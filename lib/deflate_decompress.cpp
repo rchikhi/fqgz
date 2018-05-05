@@ -1233,8 +1233,8 @@ public:
         for (int i = 0; i < (1<<15); i ++)
         {
             buffer[i] = '?';
-            buffer_counts[i] = 0;
-            backref_origins[i] = (1<<15) - i;
+            buffer_counts[i] = 0; // PERF: maybe remove this
+            backref_origins[i] = (1<<15) - i; // PERF: maybe remove this
         }
         block_size=0;
     }
@@ -1247,7 +1247,7 @@ public:
 
         for (int i = 0; i < (1<<15); i ++)
         {
-            buffer_counts[i] = 0;
+           buffer_counts[i] = 0;
         }
     }
 
@@ -1255,7 +1255,7 @@ public:
     void record_match(unsigned length, unsigned offset) {
         size_t start = size() - offset;
         for (unsigned int i = 0; i < length; i++) {
-            buffer_counts[size()+i] = ++buffer_counts[start+i];
+	        buffer_counts[size()+i] = ++buffer_counts[start+i];
             backref_origins[size()+i] = backref_origins[start+i];
         }
 
@@ -1915,9 +1915,9 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     }
                     fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
                 }
-            } else  { //FIXME: we want all the sequences, right ?
+            } else  { // we want all the sequences, right ? so here we parse them
                 // yes, so for now, we will perform that check for ALL the windows, and it will also be responsible for printing the sequences to stdout
-                out_window.check_fully_reconstructed_sequences(stop, is_final_block);
+                out_window.check_fully_reconstructed_sequences(stop, is_final_block); // PERF: this was removed to only measure performance of reading in parallel
             }
 
             out_window.notify_end_block(is_final_block, in_stream);
