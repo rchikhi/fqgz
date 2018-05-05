@@ -1315,7 +1315,6 @@ public:
             return false;
         }
 
-        unsigned ascii_found = 0;
         for(unsigned i = start ; i < size() ; i++) {
             unsigned char c = buffer[i];
             if(c > byte('~') || c < byte('\t')) {
@@ -1328,9 +1327,8 @@ public:
 
     // currently unused, replaced by check_ascii()
     // make sure the buffer contains at least something that looks like fastq
-    //
     // funny story: sometimes a bad buffer may contain many repetitions of the same ACTG letter
-    // anyhow, this function could be vastly improved by penalizing non-ACTG chars
+    // anyhow this function isn't used anymore, we use check_ascii()
     bool check_buffer_fastq(bool previously_aligned, unsigned review_len=1<<15)
     {
         unsigned start = has_dummy_32k ? (1<<15) : 0;
@@ -1377,6 +1375,13 @@ public:
         return true;
     }
 
+    // this function tries to guess the \n's
+    bool is_likely_separator(int i)
+    {
+        unsigned char c = buffer[i];
+        return (c == '\r' || c == '\n' || (c == '?' && buffer_counts[i] > 100));
+    }
+
     // decide if the buffer contains all the fastq sequences with no ambiguities in them
     // initially was made to be applied to a context
     // but during my tests, is applied to whole block to print sequences
@@ -1400,105 +1405,84 @@ public:
         std::vector<std::string> putative_sequences;
         std::string current_sequence = ""; current_sequence.reserve(256);
         unsigned current_sequence_pos = start_pos;
+
+        bool previous_char_is_separator = true; // in case block starts at beginning of sequence
+        bool currently_parsing_dna = false;
+        bool incomplete_context = false;
+        int line_skip = 0; // used to skip some lines that are for sure header/quality
+
         for (long int i = start_pos; i < next-buffer; i ++)
         {
             bool after_current_block = i >= current_blk - buffer; // FIXME: sync parser such that this is always true
             if(stop != nullptr && last_block && after_current_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
+            {
+                fprintf(stderr,"reached first seq decoded by next thread\n");
                  break; // We reached the first sequence decoded by the next thread
+            }
 
             unsigned char c = buffer[i];
-            if (ascii2Dna[c] > 0)
+            if (ascii2Dna[c] > 0 && (previous_char_is_separator || currently_parsing_dna))
+            {
+                fprintf(stderr,"parsing dna char %c, so far %s\n",c,current_sequence.c_str());
                 current_sequence += c;
+                previous_char_is_separator = false;
+                currently_parsing_dna = true;
+            }
             else
             {
-                if ((c == '\r' || c == '\n' || c == '?')  //(buffer_counts[i] > 1000))  // actually not a good heursitic
-                        && (current_sequence.size() > 30)) // heuristics here, assume reads at > 30 bp
+                bool is_separator = is_likely_separator(i);
+                if (is_separator)
                 {
-                    // Record the position of the first decoded sequence relative to the block start
-                    // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
-                    if(after_current_block) // FIXME: sync parser such that is always true
-                        first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
-
-                    putative_sequences.push_back(current_sequence);
-                    // note this code may capture stretches of quality values too
+                    fprintf(stderr,"found separator %c and have parsed %s\n",c,current_sequence.c_str());
+                    if (currently_parsing_dna)
+                    {
+                        // Record the position of the first decoded sequence relative to the block start
+                        // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
+                        if(after_current_block) // FIXME: sync parser such that is always true
+                            first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
+    
+                        putative_sequences.push_back(current_sequence);
+                        // note this code may capture stretches of quality values too
+                    }
+                }
+                else
+                {
+                    if (currently_parsing_dna)
+                    {
+                        // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
+                        fprintf(stderr,"incomplete context, reached character %c after parsing %s\n",c,current_sequence.c_str());
+                        incomplete_context = true;
+                        break;
+                    }
                 }
                 current_sequence = "";
                 current_sequence_pos = i+1;
+                currently_parsing_dna = false;
+                previous_char_is_separator = is_separator;
             }
+
+            previous_char_is_separator = is_likely_separator(i);
         }
-        if (current_sequence.size() > 30)
+        if (current_sequence.size() > 0)
             putative_sequences.push_back(current_sequence);
 
-        // get_sequences_length_histogram(); inlined
-        // first get maximum histogram length
-        int max_histogram = 0;
-        for (auto seq: putative_sequences)
-            max_histogram = std::max(max_histogram,(int)(seq.size()));
-
-        max_histogram++; // important, because we'll iterate and allocate array with numbers up to this bound
-
-        if (max_histogram > 10000)
-            fprintf(stderr,"warning: maximum putative read length %d, not supposed to happen if we have short reads", max_histogram);
-
-        // init histogram
-        std::vector<int> histogram(max_histogram);
-        for (int i = 0; i < max_histogram; i++)
-            histogram[i] = 0;
-
-        // populate it
-        for (auto seq: putative_sequences)
-            histogram[seq.size()] += 1;
-
-        // compute sum
-        int nb_reads = 0;
-        for (int i = 0; i < max_histogram; i++)
-            nb_reads += histogram[i];
-
-        // heuristic: check that all sequences are concentrated in a single value (assumes that all reads have same read length)
-        // allows for beginning and end of block reads to be truncated, so - 1
-        bool res = false;
-        int readlen = 0;
-        for (int len = 1; len < max_histogram; len++)
-        {
-            if (histogram[len] >= nb_reads - 2)
-            {
-                // heuristic: compute a lower bound on  number of reads in that context
-                // assumes that fastq file size is at most 4x the size of sequences
-                int min_nb_reads = (1<<15)/(4*len);
-                if (nb_reads < min_nb_reads)
-                    break;
-
-                res = true;
-                readlen = len;
-            }
-        }
-
-
+        int nb_reads = putative_sequences.size();
 #ifdef DEB
         //pretty_print();
 #endif
         PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
-        if (res) {
-            PRINT_DEBUG("fully reconstructed %d reads of length %d\n", nb_reads, readlen); // continuation of heuristic
+        if (!incomplete_context) {
+            PRINT_DEBUG("fully reconstructed %d reads\n", nb_reads); // continuation of heuristic
         } else {
             PRINT_DEBUG("incomplete, %d reads\n ", nb_reads);
         }
 
-        if (res == false)
-        {
-            for (int i = 0; i < max_histogram; i++)
-            {
-                if (histogram[i] > 0)
-                    PRINT_DEBUG("histogram[%d]=%d ",i,histogram[i]);
-            }
-            PRINT_DEBUG("\n");
-        }
-        else
+        if (!incomplete_context)
         { 
             for (auto seq: putative_sequences)
                 printf("%s\n",seq.c_str());
         }
-        fully_reconstructed |= res;
+        fully_reconstructed |= !incomplete_context;
 
         DEBUG_FIRST_BLOCK(exit(1);)
     }
