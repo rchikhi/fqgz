@@ -1495,9 +1495,9 @@ public:
                     putative_sequences.push_back(current_sequence);
 
                     // some debugging
-                    std::string buf_str = reinterpret_cast<const char *>(buffer);
-                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+                    //std::string buf_str = reinterpret_cast<const char *>(buffer);
+                    //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+                    //fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
                     
                     skip_quality_and_header(i, current_sequence.size());
                     current_sequence = "";
@@ -1509,8 +1509,8 @@ public:
                     }
 
                     // some debugging
-                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    fprintf(stderr,"after parsing, after jump,                  pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+                    //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+                    //fprintf(stderr,"after parsing, after jump,                  pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
                 }
                 else
                 {
@@ -1545,9 +1545,8 @@ public:
 
         if (!incomplete_context)
         { 
-            // FIXME
-            //for (auto seq: putative_sequences)
-            //    printf("%s\n",seq.c_str());
+            for (auto seq: putative_sequences)
+                printf("%s\n",seq.c_str());
         }
         fully_reconstructed |= !incomplete_context;
 
@@ -1929,6 +1928,9 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     while (beg[i++] != '\n')    first_readlen++;
     while (beg[i++] != '\n')    quality_header_length++;
     fprintf(stderr,"estimated header length: %d, quality length: %d\n",header_length,quality_header_length);
+
+    // in some files, the header is sometimes shorter. let's take that into account:
+    header_length -= 1;
 }
 
 // Original API:
