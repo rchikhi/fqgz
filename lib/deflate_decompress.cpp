@@ -1454,7 +1454,7 @@ public:
                 else
                 {
                     bool is_separator = is_likely_separator(i);
-                    if (is_separator && current_sequence.size() > 40 /* avoid false stretches */)
+                    if (is_separator && previous_sequence.size() > 40 /* avoid false stretches */)
                         putative_sequences.push_back(previous_sequence);
                     // else // cut it some slack, if the context is incomplete, that will be detected in a later sequence
                     skip_quality_and_header(i, current_sequence.size());
@@ -1632,6 +1632,7 @@ public:
     /* called when the window is full.
      * note: not necessarily at the end of a block.
     * actually: in some version of the code, it Is at the end of the block*/
+    // TODO: minor bug, but flushing an already flushed window will trigger an assert fail
     void flush() {
         //fprintf(stderr,"flushing block!!\n");
 
@@ -1669,7 +1670,7 @@ public:
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
         block_size = 0;
-        //flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
+        flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
 
     byte* current_blk;
@@ -1805,8 +1806,8 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                     PRINT_DEBUG("first block is asking to flush already, probably bad\n");
                     return false;
                 }
-                PRINT_DEBUG("flushing now\n");
-                out.flush();
+                //out.flush(); // shouldn't flush at that time, we want that char in the current buffer
+                fprintf(stderr,"wanted to flush now, but shouldn't\n");exit(1); // TODO remove that if it never happens
             }
 
             if(unlikely(char(entry >> HUFFDEC_RESULT_SHIFT) > '~')) {
@@ -1837,7 +1838,8 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                 {
                     return true; // Block done
                 } else {
-                        out.flush();
+                        //out.flush(); // same as above
+                        fprintf(stderr,"wanted to flush now, but shouldn't\n");exit(1); // TODO remove that if it never happens
                         assert(length <= out.available());
                 }
         }
@@ -2054,7 +2056,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         }
     } while((!aligned) || (aligned && !is_final_block));
 
-    out_window.flush();
+    //out_window.flush(); // no need to call, is called at the end of each block. 
 
     *actual_out_nbytes_ret = out_window.get_evicted_length(); // tell how many bytes we actually output
 
