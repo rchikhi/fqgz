@@ -1247,7 +1247,7 @@ public:
 
         for (int i = 0; i < (1<<15); i ++)
         {
-           buffer_counts[i] = 0;
+           buffer_counts[i] = 0; // FIXME: was commented before, but maybe for a good reason (Mael, do you know?) anyway I decommented it
         }
     }
 
@@ -1458,6 +1458,8 @@ public:
                         fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
                         putative_sequences.push_back(current_sequence);
                         attempt_to_skip_quality_and_header(i, current_sequence.size());
+                        if (i >= next-buffer)
+                            break; // went past buffer, no chance to read more sequence
                     }
                 }
                 else
@@ -1477,7 +1479,7 @@ public:
                 current_sequence_pos = i+1;
                 currently_parsing_dna = false;
             }
-
+            
             previous_char_is_separator = is_likely_separator(i);
             i++;
         }
