@@ -39,6 +39,7 @@ PROG_SUFFIX       :=
 PROG_CFLAGS       :=
 HARD_LINKS        := 1
 
+AR := gcc-ar
 
 #debugging options for decompression (Rayan)
 ifeq ($(deb),1)
