@@ -1417,7 +1417,7 @@ public:
         if (review_size > 0)
             start_pos = size() - review_size;
         else // review everything
-            start_pos = has_dummy_32k ? 1UL<<15 : 0;
+            start_pos = has_dummy_32k ? (1UL<<15) : 0;
 
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
@@ -1430,6 +1430,11 @@ public:
         int line_skip = 0; // used to skip some lines that are for sure header/quality
 
         long int i = start_pos;
+
+        unsigned char bufbuf[41000] = {0};
+        for (int j = 0; j < 40000; j++) bufbuf[j] = buffer[j];
+        //fprintf(stderr,"buffer preview: %s\n",bufbuf);
+        return;
 
         // heuristic: go to the _second_ stretch of 50 bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
         int repeat = 1;
@@ -1483,8 +1488,8 @@ public:
                     // some debugging
                     unsigned char ctx[41] = {0};
                     for (int j = 0; j < 40; j++) ctx[j] = (buffer[i-20+j] == '\n' ? '!' : buffer[i-20+j]);
-                    fprintf(stderr,"where we are prior to jump: %s\n",ctx);
-
+                    fprintf(stderr,"where we are prior to jump %d: %s\n",i,ctx);
+                    
                     skip_quality_and_header(i, current_sequence.size());
 
                     if (i >= size())
@@ -1617,8 +1622,9 @@ public:
      * note: not necessarily at the end of a block.
     * actually: in some version of the code, it Is at the end of the block*/
     void flush() {
+        //fprintf(stderr,"flushing block!!\n");
+
         constexpr size_t window_size = 1UL<<15;
-        fprintf(stderr,"flushing block!!\n");
         // update counts
         memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
         memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
