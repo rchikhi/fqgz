@@ -371,7 +371,7 @@ public:
       */
     inline void copy(byte* restrict out, size_t n) {
         assert(size() >= n);
-        memcpy(out, in_next, n);
+        memmove(out, in_next, n);
         in_next += n;
     }
 
@@ -1158,9 +1158,10 @@ public:
     /// Move the 32K context to the start of the buffer
     size_t flush(size_t window_size=1UL<<15) {
         assert(size() >= window_size);
+        assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
         memmove(buffer, next - window_size, window_size);
         size_t moved_by = (next - window_size) - buffer;
-
+        
         // update next pointer
         next = buffer + window_size;
 
@@ -1660,7 +1661,7 @@ public:
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
         block_size = 0;
-        flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
+        //flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
 
     byte* current_blk;
