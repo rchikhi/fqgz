@@ -288,11 +288,11 @@ public:
     }
 
     inline size_t position() const {
-        return (bitsleft / 8) + in_next - begin;
+        return in_next - begin - (bitsleft / 8);
     }
 
     inline size_t position_bits() const {
-        return (bitsleft % 8);
+        return 8*position() - (bitsleft % 8);
     }
 
 
@@ -1650,8 +1650,9 @@ public:
     }
 
     void notify_end_block(bool is_final_block, InputStream& in_stream){
-        PRINT_DEBUG("block size was %ld, bits left %ld, overrun_count %lu, nb backrefs %u, tot/avg backrefs len %u/%.1f\n",
+        PRINT_DEBUG("block size was %ld, pos %lubits, bits left %ld, overrun_count %lu, nb backrefs %u, tot/avg backrefs len %u/%.1f\n",
                     block_size,
+                    in_stream.position_bits(),
                     in_stream.bitsleft,
                     in_stream.overrun_count,
                     nb_back_refs_in_block,
