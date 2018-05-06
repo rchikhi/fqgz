@@ -1512,10 +1512,11 @@ public:
     }
 
 
-    // debug only
-    unsigned dump(byte* const dst) {
-        memcpy(dst, buffer, size());
-        return size();
+    unsigned dump(byte* const dst, int start=0, int len=0) {
+        if (len == 0)
+            len = size();
+        memcpy(dst, buffer+start, len);
+        return len;
     }
 
     void pretty_print()
@@ -1860,11 +1861,25 @@ void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
 
 /* sets some parameters based on decompression of the first block
  */
-void estimate_file_structure(unsigned &header_length, unsigned &quality_header_length)
+void estimate_file_structure(struct libdeflate_decompressor * restrict d, const byte * restrict const in, size_t in_nbytes, unsigned &header_length, unsigned &quality_header_length)
 {
-    // TODO estimate them
-    header_length = 54;
-    quality_header_length=0;
+    // very basic, decompress first block
+    bool dummy;
+    InputStream in_stream(in, in_nbytes);
+    InstrDeflateWindow out_window(nullptr, nullptr);
+    do_block(d, in_stream, out_window, dummy);
+
+    byte beg[10000]; // assumes reads are shorter than 5kbp
+    out_window.dump(beg, 1<<15 /* skip dummy context*/, 10000);
+
+    int i = 0;
+    int first_readlen = 0;
+    quality_header_length = 0;
+    header_length = 0;
+    while (beg[i++] != '\n')    header_length++;
+    while (beg[i++] != '\n')    first_readlen++;
+    while (beg[i++] != '\n')    quality_header_length++;
+    fprintf(stderr,"estimated header length: %d, quality length: %d\n",header_length,quality_header_length);
 }
 
 // Original API:
@@ -1885,7 +1900,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     InstrDeflateWindow out_window(out, out_end);
     InstrDeflateWindow backup_out(out, out_end);
 
-    estimate_file_structure(out_window.header_length, out_window.quality_header_length);
+    estimate_file_structure(d, in, in_nbytes, out_window.header_length, out_window.quality_header_length);
 
     // blocks counter
     int failed_decomp_counter = 0;
