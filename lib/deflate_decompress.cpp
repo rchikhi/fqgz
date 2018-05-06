@@ -662,6 +662,7 @@ build_decode_table(u32 decode_table[],
 		if (unlikely(remainder < 0)) {
 			/* The lengths overflow the codespace; that is, the code
 			 * is over-subscribed.  */
+            PRINT_DEBUG("build_decode_table: Over-subscribed code\n");
 			return false;
 		}
 	}
@@ -691,6 +692,7 @@ build_decode_table(u32 decode_table[],
 		 * precodes too.  */
 		if (remainder != s32(1U << (max_codeword_len - 1)) ||
 		    len_counts[1] != 1)
+            PRINT_DEBUG("build_decode_table: incomplete code\n");
 			return false;
 	}
 
@@ -922,8 +924,10 @@ bool prepare_dynamic(struct libdeflate_decompressor * restrict d,
             d->u.precode_lens[deflate_precode_lens_permutation[i]] = 0;
 
     /* Build the decode table for the precode.  */
-    if (!build_precode_decode_table(d))
+    if (!build_precode_decode_table(d)) {
+        PRINT_DEBUG("Can't build precode table\n");
         return false;
+    }
 
     /* Expand the literal/length and offset codeword lengths.  */
     for (unsigned i = 0; i < num_litlen_syms + num_offset_syms; ) {
@@ -1312,13 +1316,14 @@ public:
         unsigned start = has_dummy_32k ? (1<<15) : 0;
         unsigned dec_size = size() - start;
         if(dec_size < (5UL<<10)) { // 5K: Required decoded size to properly assess block synchronization
+            PRINT_DEBUG("check_ascii: block too small\n");
             return false;
         }
 
         for(unsigned i = start ; i < size() ; i++) {
             unsigned char c = buffer[i];
             if(c > byte('~') || c < byte('\t')) {
-                //fprintf(stderr,"non ascii found: %d\n",(unsigned int)c);
+                PRINT_DEBUG("non ascii found: %d\n",(unsigned int)c);
                 return false;
             }
         }
@@ -1634,7 +1639,9 @@ public:
             size_t start = has_dummy_32k ? 1UL<<15 : 0;
             moved_by = FlushableDeflateWindow::flush(start);
         } else {
+           PRINT_DEBUG("Going to flush, size=%d\n", size());
            moved_by = DeflateWindow::flush(); // Only move the context to the begining
+           PRINT_DEBUG("Moved by=%d\n", moved_by);
         }
 
         current_blk -= moved_by;
@@ -1735,23 +1742,27 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
     switch(in_stream.pop_bits(2)) {
     case DEFLATE_BLOCKTYPE_DYNAMIC_HUFFMAN:
         ret = prepare_dynamic(d, in_stream);
-        if (!ret)
+        if (!ret) {
+            PRINT_DEBUG("Bad dynamic HT\n");
             return false;
+        }
         break;
 
     case DEFLATE_BLOCKTYPE_UNCOMPRESSED:
         ret = do_uncompressed(in_stream, out);
-        if (!ret)
+        if(!ret) {
+            PRINT_DEBUG("Bad uncompressed block\n");
             return false;
+        }
         break;
 
     case DEFLATE_BLOCKTYPE_STATIC_HUFFMAN:
         ret = prepare_static(d);
-        if (!ret)
-            return false;
+        assert(ret); // No way this can fail
         break;
 
     default:
+        PRINT_DEBUG("Bad block type\n");
         return false;
     }
 
@@ -1788,11 +1799,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
             }
 
             if(unlikely(char(entry >> HUFFDEC_RESULT_SHIFT) > '~')) {
-            {
                 PRINT_DEBUG("fail, unprintable literal unexpected in fastq\n");
-                return false;
-            }
-
                 return false;
             }
             out.push(byte(entry >> HUFFDEC_RESULT_SHIFT));
