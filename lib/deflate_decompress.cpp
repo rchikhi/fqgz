@@ -1154,8 +1154,7 @@ public:
     /// Move the 32K context to the start of the buffer
     size_t flush(size_t window_size=1UL<<15) {
         assert(size() >= window_size);
-        assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
-        memcpy(buffer, next - window_size, window_size);
+        memmove(buffer, next - window_size, window_size);
         size_t moved_by = (next - window_size) - buffer;
 
         // update next pointer
@@ -1189,7 +1188,7 @@ public:
         assert(buffer + start + evict_size == next - window_size);
         assert(target + evict_size < target_end);
 
-        memcpy(target, buffer + start, evict_size);
+        memmove(target, buffer + start, evict_size);
         target += evict_size;
 
         // Then move the context to the start
@@ -1413,11 +1412,9 @@ public:
         }
 
         // when this function is called, we're at the start of a new block, so let's determine where to start inspecting
-        long int start_pos = 0;
-        if (review_size > 0)
+        long int start_pos = size()-block_size;
+        if (review_size > 0 && (size() - review_size > start_pos))
             start_pos = size() - review_size;
-        else // review everything
-            start_pos = has_dummy_32k ? (1UL<<15) : 0;
 
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
@@ -1626,8 +1623,8 @@ public:
 
         constexpr size_t window_size = 1UL<<15;
         // update counts
-        memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
-        memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
+        memmove(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
+        memmove(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
 
         unsigned moved_by;
         if(false && output_to_target) {
@@ -1854,7 +1851,6 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         out.copy_match(length, offset);
     }
 
-    out.notify_end_block(is_final_block, in_stream);
     return true;
 }
 
@@ -1886,7 +1882,6 @@ void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
         skip_counter--;
     if (skip_counter == 0 && out_window.fully_reconstructed)
     {
-        //out_window.flush(); // re-initialize the window with just a context and no other block data // TODO not sure if that should be placed here or outside if
         out_window.output_to_target = true; // the next block and so on will be output to "out"
     }
 }
@@ -1947,7 +1942,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     /* Skipping user-set amount of bytes, after the header of course */
     if (skip)
     {
-        in_stream.in_next += skip; // TODO: will probably not be valid when input is a stream
+        in_stream.in_next += skip;
         out_window.output_to_target = false;
         skip_counter = 0; //20; // skip 20 blocks before checking for valid fastq // FIXME
     }
@@ -1964,7 +1959,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         bool went_fine = aligned || in_stream.bits(1) == 0; 
         if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
-            went_fine = out_window.size() > (1UL << 15) + (10UL << 10);
+            went_fine = out_window.size() > (1UL << 15) + (10UL << 10); // block needs to be larger than 10K
             if(went_fine) went_fine = out_window.check_ascii();
             //if(went_fine) went_fine = out_window.check_buffer_fastq(false);
             if(went_fine) {
@@ -2006,7 +2001,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                 // yes, so for now, we will perform that check for ALL the windows, and it will also be responsible for printing the sequences to stdout
                 out_window.check_fully_reconstructed_sequences(stop, is_final_block); // PERF: this was removed to only measure performance of reading in parallel
             }
-
+    
             out_window.notify_end_block(is_final_block, in_stream);
         }
         else
