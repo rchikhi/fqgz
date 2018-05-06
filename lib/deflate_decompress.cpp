@@ -1486,7 +1486,7 @@ public:
                     unsigned previous_i = i; 
                     skip_quality_and_header(i, current_sequence.size());
 
-                    if (i >= size()) // went past buffer, no chance to read more sequence
+                    if (i >= size() && (!last_block)) // went past buffer, no chance to read more sequence
                     {
                         // lets not insert that sequence and keep it for the next block
                         previous_rewind = (size() - previous_i) + current_sequence.size(); // record how many chars to go back, in next block
