@@ -1411,6 +1411,7 @@ public:
     // parse sequences in block, decide if it's fully reconstructed
     void parse_block(synchronizer* stop, bool last_block)
     {
+        int min_read_length = 35; 
        long int start_pos = size()-block_size;
 
         // get_sequences_between_separators(); inlined
@@ -1454,7 +1455,7 @@ public:
                 else
                 {
                     bool is_separator = is_likely_separator(i);
-                    if (is_separator && previous_sequence.size() > 40 /* avoid false stretches */)
+                    if (is_separator && previous_sequence.size() >= min_read_length /* avoid false stretches */)
                         putative_sequences.push_back(previous_sequence);
                     // else // cut it some slack, if the context is incomplete, that will be detected in a later sequence
                     skip_quality_and_header(i, current_sequence.size());
@@ -1484,7 +1485,7 @@ public:
             else
             {
                 bool is_separator = is_likely_separator(i);
-                if (is_separator && current_sequence.size() > 40 /* avoid false stretches */)
+                if (is_separator && current_sequence.size() >= min_read_length /* avoid false stretches */)
                 {
                     // Record the position of the first decoded sequence relative to the block start
                     // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
@@ -1494,10 +1495,12 @@ public:
                     //fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
                     putative_sequences.push_back(current_sequence);
 
-                    // some debugging
-                    //std::string buf_str = reinterpret_cast<const char *>(buffer);
-                    //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    //fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+//#define DEBUG_SKIPPING
+#ifdef DEBUG_SKIPPING
+                    std::string buf_str = reinterpret_cast<const char *>(buffer);
+                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+                    fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+#endif
                     
                     skip_quality_and_header(i, current_sequence.size());
                     current_sequence = "";
@@ -1508,9 +1511,10 @@ public:
                         break; 
                     }
 
-                    // some debugging
-                    //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    //fprintf(stderr,"after parsing, after jump,                  pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+#ifdef DEBUG_SKIPPING
+                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+                    fprintf(stderr,"after parsing, after jump,                  pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+#endif
                 }
                 else
                 {
