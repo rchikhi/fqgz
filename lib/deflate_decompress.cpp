@@ -1931,8 +1931,10 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     while (beg[i++] != '\n')    quality_header_length++;
     fprintf(stderr,"estimated header length: %d, quality length: %d\n",header_length,quality_header_length);
 
-    // in some files, the header is sometimes shorter. let's take that into account:
-    header_length -= 1;
+    // in some files, the header is sometimes shorter. let's take that into account
+    // see for instance:
+    // python scripts/test_hypothesis_header_size.py /nvme/fastq/ERA983635-LMS1-C1.fastq.gz
+    header_length -= 4;
 }
 
 // Original API:
