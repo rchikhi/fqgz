@@ -1236,11 +1236,10 @@ public:
 
         for (int i = 0; i < (1<<15); i ++)
         {
-            buffer[i] = '?';
+            buffer[i] = '|';
             buffer_counts[i] = 0; // PERF: maybe remove this
             backref_origins[i] = (1<<15) - i; // PERF: maybe remove this
         }
-        block_size=0;
     }
 
     void clear() {
@@ -1253,6 +1252,9 @@ public:
         {
            buffer_counts[i] = 0; // FIXME: was commented before, but maybe for a good reason (Mael, do you know?) anyway I decommented it
         }
+        block_size = 0;
+        previous_sequence = "";
+        previous_skip = 0;
     }
 
     // record into a dedicated buffer that store counts of back references
@@ -1383,20 +1385,21 @@ public:
 
     // this function tries to guess the \n's
     // it can sometimes be called with i larger than buffer size, just be graceful
-    bool is_likely_separator(int i)
+    bool is_likely_separator(unsigned i)
     {
         if (i >= size()) return true; 
         unsigned char c = buffer[i];
-        return (c == '\n' || (c == '?' && buffer_counts[i] > 100));
+        return (c == '\n' || (c == '|' && buffer_counts[i] > 100));
     }
 
-    // we're at the end of a sequence, try to get to the beginning of a next one
+    // we're at the end of a sequence, i == the position of the \n
+    // try to get to the beginning of a next one
     // assumes a few things:
     // header length only increases compared to the first measured header length
     // same for quality header length
-    void skip_quality_and_header(long int &i, int readlen)
+    void skip_quality_and_header(unsigned &i, int readlen)
     {
-        i++; // skip the next \n
+        i ++; // skip that \n
         i += quality_header_length; // the quality + and the (likely empty) quality header
         while (!is_likely_separator(i++)) {} // go after the \n after quality header
         i += readlen;  // the quality seq
@@ -1405,59 +1408,63 @@ public:
         while (!is_likely_separator(i++)) {} // go after the \n after header
     }
 
-    // decide if the buffer contains all the fastq sequences with no ambiguities in them
-    // initially was made to be applied to a context
-    // but during my tests, is applied to whole block to print sequences
-    void check_fully_reconstructed_sequences(synchronizer* stop, bool last_block, unsigned review_size=/*1<<15*/ 0 /* review everything*/)
+    // parse sequences in block, decide if it's fully reconstructed
+    void parse_block(synchronizer* stop, bool last_block)
     {
-        if (size() < review_size)
-        {
-            fprintf(stderr,"not enough context to check context. should that happen?\n"); // i don't think so but worth checking
-            exit(1);
-            return;
-        }
-
-        // when this function is called, we're at the start of a new block, so let's determine where to start inspecting
-        long int start_pos = size()-block_size;
-        if (review_size > 0 && (size() - review_size > start_pos))
-            start_pos = size() - review_size;
+       long int start_pos = size()-block_size;
 
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
         std::string current_sequence = ""; current_sequence.reserve(256);
         unsigned current_sequence_pos = start_pos;
 
-        bool previous_char_is_separator = true; // in case block starts at beginning of sequence
-        bool currently_parsing_dna = false;
         bool incomplete_context = false;
-        int line_skip = 0; // used to skip some lines that are for sure header/quality
 
-        long int i = start_pos;
+        unsigned i = start_pos + previous_skip;
+        previous_skip = 0;
 
-        unsigned char bufbuf[41000] = {0};
-        for (int j = 0; j < 40000; j++) bufbuf[j] = buffer[j];
-        //fprintf(stderr,"buffer preview: %s\n",bufbuf);
-        return;
-
-        // heuristic: go to the _second_ stretch of 50 bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
-        int repeat = 1;
-        while (repeat++ < 2)
+        if (previous_sequence.size() == 0)
         {
-            int stretch = 0;
-            while ((i < size()) && (stretch++) < 50) 
+            // heuristic: go to the _second_ stretch of 50 bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
+            int repeat = 1;
+            while (repeat++ < 2)
             {
-                if (ascii2Dna[buffer[i++]] == 0) stretch=0;
+                int stretch = 0;
+                while ((i < size()) && (stretch++) < 50) 
+                {
+                    if (ascii2Dna[buffer[i++]] == 0) stretch=0;
+                }
+                if ( i == size()) // no sequences
+                {
+                    fprintf(stderr,"buffer doesnt contain any >=50bp dna sequences");
+                    fully_reconstructed = false;
+                    return;            
+                }
             }
-            if ( i == size()) // no sequences
+            i -= 50;
+        }
+        else
+        {
+            // we had a previous sequence, let's finish it
+            while (i < size())
             {
-                fprintf(stderr,"buffer doesnt contain any >=50bp dna sequences");
-                fully_reconstructed = false;
-                return;            
+                unsigned char c = buffer[i];
+                if (ascii2Dna[c] > 0)
+                    previous_sequence += c;
+                else
+                {
+                    bool is_separator = is_likely_separator(i);
+                    if (is_separator && current_sequence.size() > 40 /* avoid false stretches */)
+                        putative_sequences.push_back(previous_sequence);
+                    // else // cut it some slack, if the context is incomplete, that will be detected in a later sequence
+                    skip_quality_and_header(i, current_sequence.size());
+                    break;
+                }
+                i++;
             }
         }
-        i-=50;
 
-        // invariant: we're parsing a dna sequence until the next non-dna
+        // invariant: we're at the beginning of a DNA sequence in the fastq file
         while (i < size())
         {
             bool after_current_block = i >= current_blk - buffer; // FIXME: sync parser such that this is always true
@@ -1486,23 +1493,24 @@ public:
 
                     //fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
                     putative_sequences.push_back(current_sequence);
-                    current_sequence = "";
 
                     // some debugging
-                    unsigned char ctx[41] = {0};
-                    for (int j = 0; j < 40; j++) ctx[j] = (buffer[i-20+j] == '\n' ? '!' : buffer[i-20+j]);
-                    fprintf(stderr,"where we are prior to jump %d: %s\n",i,ctx);
+                    std::string buf_str = reinterpret_cast<const char *>(buffer);
+                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+                    fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
                     
                     skip_quality_and_header(i, current_sequence.size());
+                    current_sequence = "";
 
-                    if (i >= size())
-                        break; // went past buffer, no chance to read more sequence
+                    if (i >= size()) // went past buffer, no chance to read more sequence
+                    {
+                        previous_skip = i-size(); // record how many chars to skip for next block
+                        break; 
+                    }
 
                     // some debugging
-                    for (int j = 0; j < 40; j++) ctx[j] = (buffer[i-20+j] == '\n' ? '!' : buffer[i-20+j]);
-                    fprintf(stderr,"where we are after jump: %s\n",ctx);
-
- 
+                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+                    fprintf(stderr,"after parsing, after jump,                  pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
                 }
                 else
                 {
@@ -1517,8 +1525,8 @@ public:
             }
             
         }
-        if (current_sequence.size() > 0)
-            putative_sequences.push_back(current_sequence);
+       
+        previous_sequence = current_sequence; // for the next block
 
         int nb_reads = putative_sequences.size();
 #ifdef DEB
@@ -1537,8 +1545,9 @@ public:
 
         if (!incomplete_context)
         { 
-            for (auto seq: putative_sequences)
-                printf("%s\n",seq.c_str());
+            // FIXME
+            //for (auto seq: putative_sequences)
+            //    printf("%s\n",seq.c_str());
         }
         fully_reconstructed |= !incomplete_context;
 
@@ -1586,7 +1595,7 @@ public:
                 fprintf(stderr,"%s\\n%c%s",color,buffer[i],KNRM);
             else {
                 if(backref_origins[i] > 0) { // Live reference to the unknown initial context window
-                    assert(buffer[i]== byte('?'));
+                    assert(buffer[i]== byte('|'));
 
                     // Compute the monotone span of backreferences to the unknown primary window
                     uint16_t start = backref_origins[i]; // First offset
@@ -1684,6 +1693,10 @@ public:
     // some info to help fastq parsing
     unsigned header_length;
     unsigned quality_header_length;
+    
+    std::string previous_sequence ; //  unfinished sequence from previous block
+    unsigned previous_skip; // amount of bytes to skip due to parsing of previous block
+
 };
 
 
@@ -1953,7 +1966,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     {
         in_stream.in_next += skip;
         out_window.output_to_target = false;
-        skip_counter = 0; //20; // skip 20 blocks before checking for valid fastq // FIXME
+        skip_counter = 20; // skip 20 blocks before checking for valid fastq 
     }
 
     bool is_final_block = false, aligned = false;
@@ -1961,7 +1974,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     do {
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
-
 
         size_t block_inpos = in_stream.position();
         in_stream.ensure_bits<1>();
@@ -1995,10 +2007,13 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     fprintf(stderr, "thread %lu stoped at %lu\n", pthread_self(), block_inpos);
             }
 
-            if (skip_counter == 0 && out_window.fully_reconstructed == false)
+            if (skip_counter == 0)
             {
-                out_window.check_fully_reconstructed_sequences(stop, is_final_block); // see if we have uncertainties in nucleotides
-                if (out_window.fully_reconstructed) {
+                bool previously_not_reconstructed = !out_window.fully_reconstructed;
+
+                out_window.parse_block(stop, is_final_block);
+
+                if (previously_not_reconstructed && out_window.fully_reconstructed) {
                     if(prev_sync != nullptr) {
                         fprintf(stderr, "Thread %lu found it's first sequence in block %lu at position %u\n",
                                 pthread_self(), block_inpos, out_window.first_seq_block_pos);
@@ -2006,11 +2021,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     }
                     fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
                 }
-            } else  { // we want all the sequences, right ? so here we parse them
-                // yes, so for now, we will perform that check for ALL the windows, and it will also be responsible for printing the sequences to stdout
-                out_window.check_fully_reconstructed_sequences(stop, is_final_block); // PERF: this was removed to only measure performance of reading in parallel
             }
-    
+
             out_window.notify_end_block(is_final_block, in_stream);
         }
         else
