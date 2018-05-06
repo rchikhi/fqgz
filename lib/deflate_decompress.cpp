@@ -1253,8 +1253,7 @@ public:
            buffer_counts[i] = 0; // FIXME: was commented before, but maybe for a good reason (Mael, do you know?) anyway I decommented it
         }
         block_size = 0;
-        previous_sequence = "";
-        previous_skip = 0;
+        previous_rewind = 0;
     }
 
     // record into a dedicated buffer that store counts of back references
@@ -1411,7 +1410,7 @@ public:
     // parse sequences in block, decide if it's fully reconstructed
     void parse_block(synchronizer* stop, bool last_block)
     {
-        int min_read_length = 35; 
+        unsigned min_read_length = 35; 
        long int start_pos = size()-block_size;
 
         // get_sequences_between_separators(); inlined
@@ -1421,48 +1420,33 @@ public:
 
         bool incomplete_context = false;
 
-        unsigned i = start_pos + previous_skip;
-        previous_skip = 0;
+        unsigned i = start_pos - previous_rewind;
+        previous_rewind = 0;
 
-        if (previous_sequence.size() == 0)
+        //std::string buf_str = reinterpret_cast<const char *>(buffer);
+        //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
+        //fprintf(stderr,"beginning of block, pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+
+        if (has_dummy_32k) // first block?
         {
-            // heuristic: go to the _second_ stretch of 50 bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
+            // in case this is the first block, we don't know where to start.
+            // heuristic: go to the _second_ stretch of min_read_length bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
             int repeat = 1;
             while (repeat++ < 2)
             {
-                int stretch = 0;
-                while ((i < size()) && (stretch++) < 50) 
+                unsigned stretch = 0;
+                while ((i < size()) && (stretch++) < min_read_length) 
                 {
                     if (ascii2Dna[buffer[i++]] == 0) stretch=0;
                 }
                 if ( i == size()) // no sequences
                 {
-                    fprintf(stderr,"buffer doesnt contain any >=50bp dna sequences");
+                    fprintf(stderr,"buffer doesnt contain any >= %d bp dna sequences", min_read_length);
                     fully_reconstructed = false;
                     return;            
                 }
             }
-            i -= 50;
-        }
-        else
-        {
-            // we had a previous sequence, let's finish it
-            while (i < size())
-            {
-                unsigned char c = buffer[i];
-                if (ascii2Dna[c] > 0)
-                    previous_sequence += c;
-                else
-                {
-                    bool is_separator = is_likely_separator(i);
-                    if (is_separator && previous_sequence.size() >= min_read_length /* avoid false stretches */)
-                        putative_sequences.push_back(previous_sequence);
-                    // else // cut it some slack, if the context is incomplete, that will be detected in a later sequence
-                    skip_quality_and_header(i, current_sequence.size());
-                    break;
-                }
-                i++;
-            }
+            i -= min_read_length;
         }
 
         // invariant: we're at the beginning of a DNA sequence in the fastq file
@@ -1487,13 +1471,11 @@ public:
                 bool is_separator = is_likely_separator(i);
                 if (is_separator && current_sequence.size() >= min_read_length /* avoid false stretches */)
                 {
+                    current_sequence_pos = i - current_sequence.size();
                     // Record the position of the first decoded sequence relative to the block start
                     // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
                     if(after_current_block) // FIXME: sync parser such that is always true
                         first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
-
-                    //fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
-                    putative_sequences.push_back(current_sequence);
 
 //#define DEBUG_SKIPPING
 #ifdef DEBUG_SKIPPING
@@ -1501,14 +1483,21 @@ public:
                     for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
                     fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
 #endif
-                    
+                    unsigned previous_i = i; 
                     skip_quality_and_header(i, current_sequence.size());
-                    current_sequence = "";
 
                     if (i >= size()) // went past buffer, no chance to read more sequence
                     {
-                        previous_skip = i-size(); // record how many chars to skip for next block
+                        // lets not insert that sequence and keep it for the next block
+                        previous_rewind = (size() - previous_i) + current_sequence.size(); // record how many chars to go back, in next block
+                        //fprintf(stderr,"we think a good rewind location is -%d: %s[>]%s\n",previous_rewind,buf_str.substr(size()-previous_rewind-20,20).c_str(),buf_str.substr(size()-previous_rewind,std::min((unsigned)size()-20,(unsigned)20)).c_str());
                         break; 
+                    }
+                    else
+                    {
+                        //fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
+                        putative_sequences.push_back(current_sequence);
+                        current_sequence = "";
                     }
 
 #ifdef DEBUG_SKIPPING
@@ -1518,19 +1507,24 @@ public:
                 }
                 else
                 {
-                    // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
-                    std::string prev = "none";
-                    if (putative_sequences.size() > 0)
-                        prev = putative_sequences[putative_sequences.size()-1];
-                    fprintf(stderr,"incomplete context, reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
-                    incomplete_context = true;
-                    break;
+                    if (current_sequence.size() > 0)
+                    {
+                        // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
+                        std::string prev = "none";
+                        if (putative_sequences.size() > 0)
+                            prev = putative_sequences[putative_sequences.size()-1];
+                        fprintf(stderr,"incomplete context, reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
+                        incomplete_context = true;
+                        break;
+                    }
+                    i++;
                 }
             }
             
         }
-       
-        previous_sequence = current_sequence; // for the next block
+      
+        if (previous_rewind == 0)
+            previous_rewind = current_sequence.size();
 
         int nb_reads = putative_sequences.size();
 #ifdef DEB
@@ -1698,8 +1692,7 @@ public:
     unsigned header_length;
     unsigned quality_header_length;
     
-    std::string previous_sequence ; //  unfinished sequence from previous block
-    unsigned previous_skip; // amount of bytes to skip due to parsing of previous block
+    unsigned previous_rewind; // amount of bytes to rewind due to parsing of previous block
 
 };
 
