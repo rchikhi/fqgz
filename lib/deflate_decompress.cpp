@@ -1377,22 +1377,27 @@ public:
     }
 
     // this function tries to guess the \n's
+    // it can sometimes be called with i larger than buffer size, just be graceful
     bool is_likely_separator(int i)
     {
+        if (i >= size()) return true; 
         unsigned char c = buffer[i];
-        return (c == '\r' || c == '\n' || (c == '?' && buffer_counts[i] > 100));
+        return (c == '\n' || (c == '?' && buffer_counts[i] > 100));
     }
 
-    // we're at the end of a sequence,
-    void attempt_to_skip_quality_and_header(long int &i, int readlen)
+    // we're at the end of a sequence, try to get to the beginning of a next one
+    // assumes a few things:
+    // header length only increases compared to the first measured header length
+    // same for quality header length
+    void skip_quality_and_header(long int &i, int readlen)
     {
         i++; // skip the next \n
-        i += quality_header_length; // the quality + and the header
-        i++; // the \n after quality header
+        i += quality_header_length; // the quality + and the (likely empty) quality header
+        while (!is_likely_separator(i++)) {} // go after the \n after quality header
         i += readlen;  // the quality seq
-        i++; // the \n after quality seq
+        while (!is_likely_separator(i++)) {} // go after the \n after quality seq
         i += header_length; // the header 
-        i++; // the \n after header
+        while (!is_likely_separator(i++)) {} // go after the \n after header
     }
 
     // decide if the buffer contains all the fastq sequences with no ambiguities in them
@@ -1426,7 +1431,26 @@ public:
 
         long int i = start_pos;
 
-        while (i < next-buffer)
+        // heuristic: go to the _second_ stretch of 50 bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
+        int repeat = 1;
+        while (repeat++ < 2)
+        {
+            int stretch = 0;
+            while ((i < size()) && (stretch++) < 50) 
+            {
+                if (ascii2Dna[buffer[i++]] == 0) stretch=0;
+            }
+            if ( i == size()) // no sequences
+            {
+                fprintf(stderr,"buffer doesnt contain any >=50bp dna sequences");
+                fully_reconstructed = false;
+                return;            
+            }
+        }
+        i-=50;
+
+        // invariant: we're parsing a dna sequence until the next non-dna
+        while (i < size())
         {
             bool after_current_block = i >= current_blk - buffer; // FIXME: sync parser such that this is always true
             if(stop != nullptr && last_block && after_current_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
@@ -1436,52 +1460,54 @@ public:
             }
 
             unsigned char c = buffer[i];
-            if (ascii2Dna[c] > 0 && (previous_char_is_separator || currently_parsing_dna))
+            if (ascii2Dna[c] > 0)
             {
                 //fprintf(stderr,"parsing dna char %c, so far %s\n",c,current_sequence.c_str());
                 current_sequence += c;
-                previous_char_is_separator = false;
-                currently_parsing_dna = true;
+                i++;
             }
             else
             {
                 bool is_separator = is_likely_separator(i);
-                if (is_separator)
+                if (is_separator && current_sequence.size() > 40 /* avoid false stretches */)
                 {
-                    if (currently_parsing_dna && current_sequence.size() > 40 /* avoid false stretches */)
-                    {
-                        // Record the position of the first decoded sequence relative to the block start
-                        // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
-                        if(after_current_block) // FIXME: sync parser such that is always true
-                            first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
-    
-                        fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
-                        putative_sequences.push_back(current_sequence);
-                        attempt_to_skip_quality_and_header(i, current_sequence.size());
-                        if (i >= next-buffer)
-                            break; // went past buffer, no chance to read more sequence
-                    }
+                    // Record the position of the first decoded sequence relative to the block start
+                    // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
+                    if(after_current_block) // FIXME: sync parser such that is always true
+                        first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
+
+                    //fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
+                    putative_sequences.push_back(current_sequence);
+                    current_sequence = "";
+
+                    // some debugging
+                    unsigned char ctx[41] = {0};
+                    for (int j = 0; j < 40; j++) ctx[j] = (buffer[i-20+j] == '\n' ? '!' : buffer[i-20+j]);
+                    fprintf(stderr,"where we are prior to jump: %s\n",ctx);
+
+                    skip_quality_and_header(i, current_sequence.size());
+
+                    if (i >= size())
+                        break; // went past buffer, no chance to read more sequence
+
+                    // some debugging
+                    for (int j = 0; j < 40; j++) ctx[j] = (buffer[i-20+j] == '\n' ? '!' : buffer[i-20+j]);
+                    fprintf(stderr,"where we are after jump: %s\n",ctx);
+
+ 
                 }
                 else
                 {
-                    if (currently_parsing_dna && putative_sequences.size() >= 2 /* don't trust the very first sequence, we don't know if it's a qual or a seq*/ ) 
-                    {
-                        // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
-                        std::string prev = "none";
-                        if (putative_sequences.size() > 0)
-                            prev = putative_sequences[putative_sequences.size()-1];
-                        fprintf(stderr,"incomplete context, reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
-                        incomplete_context = true;
-                        break;
-                    }
+                    // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
+                    std::string prev = "none";
+                    if (putative_sequences.size() > 0)
+                        prev = putative_sequences[putative_sequences.size()-1];
+                    fprintf(stderr,"incomplete context, reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
+                    incomplete_context = true;
+                    break;
                 }
-                current_sequence = "";
-                current_sequence_pos = i+1;
-                currently_parsing_dna = false;
             }
             
-            previous_char_is_separator = is_likely_separator(i);
-            i++;
         }
         if (current_sequence.size() > 0)
             putative_sequences.push_back(current_sequence);
@@ -1929,7 +1955,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
         size_t block_inpos = in_stream.position();
         in_stream.ensure_bits<1>();
-        bool went_fine = true; // aligned || in_stream.bits(1) == 0; // FIXME Mael this check doesn't seem to work on many fastq files, e.g. /nvme//fastq/ERA992995-160825_D00261_0358_BC9JAVANXX_1_TP-D7-010_TP-D5-008_1.fastq.gz
+        bool went_fine = aligned || in_stream.bits(1) == 0; 
         if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
             went_fine = out_window.size() > (1UL << 15) + (10UL << 10);
