@@ -76,6 +76,8 @@ struct DeflateWindow
         from.next = nullptr;
     }
 
+    DeflateWindow operator=(DeflateWindow&&) = delete;
+
     /// Clone the context window
     DeflateWindow(const DeflateWindow& from)
       : DeflateWindow()
