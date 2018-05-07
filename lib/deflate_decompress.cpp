@@ -1158,7 +1158,7 @@ public:
     /// Move the 32K context to the start of the buffer
     size_t flush(size_t window_size=1UL<<15) {
         assert(size() >= window_size);
-        assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
+        //assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping, edit: now they can with memove
         memmove(buffer, next - window_size, window_size);
         size_t moved_by = (next - window_size) - buffer;
         
@@ -1759,12 +1759,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         break;
 
     case DEFLATE_BLOCKTYPE_UNCOMPRESSED:
-        ret = do_uncompressed(in_stream, out);
-        if(!ret) {
-            PRINT_DEBUG("Bad uncompressed block\n");
-            return false;
-        }
-        break;
+        return do_uncompressed(in_stream, out);
 
     case DEFLATE_BLOCKTYPE_STATIC_HUFFMAN:
         ret = prepare_static(d);
