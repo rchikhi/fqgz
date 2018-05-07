@@ -20,13 +20,13 @@
 cc-option = $(shell if $(CXX) $(1) -c -x c /dev/null -o /dev/null \
 	      1>&2 2>/dev/null; then echo $(1); fi)
 
-override CFLAGS :=							\
-        $(CFLAGS) -O0 -march=native -mtune=native -g -std=c++14 -I. -Icommon -lpthread	\
-	-Iexternal/type_safe/include					\
-	-Iexternal/type_safe/external/debug_assert			\
-        -Wall -Wundef -Wrestrict -Wnull-dereference -Wuseless-cast -Wshadow -Weffc++ \
-	$(call cc-option,-Wpedantic)					\
-	$(call cc-option,-Wvla)
+override CFLAGS += -std=c++14 -I. -Icommon -lpthread                    \
+        -Iexternal/type_safe/include                                    \
+        -Iexternal/type_safe/external/debug_assert                      \
+        -Wall -Wundef -Wrestrict -Wnull-dereference -Wuseless-cast      \
+        -Wshadow -Weffc++                                               \
+        $(call cc-option,-Wpedantic)                                    \
+        $(call cc-option,-Wvla)
 
 ##############################################################################
 
@@ -36,6 +36,33 @@ SHARED_LIB_CFLAGS := -fPIC
 PROG_SUFFIX       :=
 PROG_CFLAGS       :=
 HARD_LINKS        := 1
+
+#debugging options for decompression (Rayan)
+
+# Enable assertion by default (for now)
+ifeq ($(debug),1)
+    asserts=1
+    override CFLAGS += -O0 -ggdb
+else
+    override CFLAGS += -O4 -flto -march=native -mtune=native
+endif
+
+
+ifndef asserts
+    asserts=1
+endif
+
+ifneq ($(asserts),1)
+     LIB_CFLAGS+= -DNDEBUG
+endif
+
+ifeq ($(print_debug),1)
+     LIB_CFLAGS+= -DPRINT_DEBUG=1
+endif
+
+ifeq ($(print_debug_first),1)
+     LIB_CFLAGS+= -DPRINT_DEBUG_FIRST=1
+endif
 
 # Compiling for Windows with MinGW?
 ifneq ($(findstring -mingw,$(shell $(CXX) -dumpmachine 2>/dev/null)),)

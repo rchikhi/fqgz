@@ -10,13 +10,6 @@
 #include "unaligned.h"
 #include "input_stream.hpp"
 
-#define PRINT_DEBUG(...)                                                                                                                                       \
-    {}
-//#define PRINT_DEBUG(...) {fprintf(stderr, __VA_ARGS__);}
-#define DEBUG_FIRST_BLOCK(x)                                                                                                                                   \
-    {}
-//#define DEBUG_FIRST_BLOCK(x) {x}
-
 template<typename to_t = size_t, typename from_t>
 static inline to_t
 repeat_bits(from_t b)
