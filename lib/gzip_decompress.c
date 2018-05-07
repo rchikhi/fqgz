@@ -116,12 +116,21 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor* d,
             return LIBDEFLATE_BAD_DATA;
     }
 
+    // Estimate size:
+    size_t decoded_size = get_unaligned_le32(in_end - 4); // Size from footer (modulo 4GB)
+    decoded_size += size_t((in_end - in) * 3.2) & ~((1UL << 32) - 1);
+    // Compression ratio for the deflate stream
+    double compression_ratio = double(decoded_size) / double(in_end - in_next - 8);
+    PRINT_DEBUG("Deompressed size %lu, compression factor %f\n", decoded_size, compression_ratio);
+
     nthreads = std::min(1 + unsigned(in_nbytes >> 26), nthreads);
     if (nthreads <= 1) {
         /* Compressed data  */
         result = libdeflate_deflate_decompress(
           d, in_next, in_end - GZIP_FOOTER_SIZE - in_next, out, out_nbytes_avail, actual_out_nbytes_ret, nullptr, nullptr, skip, until);
     } else {
+        PRINT_DEBUG("Using %u threads\n", nthreads);
+
         std::vector<std::thread> threads;
         threads.reserve(nthreads);
         std::vector<synchronizer> syncs(nthreads - 1);
