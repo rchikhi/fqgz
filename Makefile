@@ -84,7 +84,7 @@ SHARED_LIB := libdeflate$(SHARED_LIB_SUFFIX)
 
 LIB_CFLAGS += $(CFLAGS) -fvisibility=hidden -D_ANSI_SOURCE
 
-LIB_HEADERS := $(wildcard lib/*.h)
+LIB_HEADERS := $(wildcard lib/*.h) $(wildcard lib/*.hpp)
 
 LIB_SRC :=
 LIB_SRC_CXX := lib/deflate_decompress.cpp
