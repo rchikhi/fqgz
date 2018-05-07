@@ -39,6 +39,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 			   size_t *actual_out_nbytes_ret)
 {
 	const u8 *in_next = in;
+    const u8 * const in_begin = in;
 	const u8 * const in_end = in_next + in_nbytes;
 	u8 flg;
 	size_t actual_out_nbytes;
@@ -101,6 +102,13 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 			return LIBDEFLATE_BAD_DATA;
 	}
 
+    // Estimate size:
+    u64 decoded_size = get_unaligned_le32(in_end - 4); // Size from footer (modulo 4GB)
+    decoded_size += (u64)((in_end - in_begin) * 3.2) & ~((1UL << 32) - 1);
+
+    if(!actual_out_nbytes_ret)
+        actual_out_nbytes_ret = &actual_out_nbytes;
+
 	/* Compressed data  */
 	result = libdeflate_deflate_decompress(d, in_next,
 					in_end - GZIP_FOOTER_SIZE - in_next,
@@ -109,21 +117,18 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 	if (result != LIBDEFLATE_SUCCESS)
 		return result;
 
-	if (actual_out_nbytes_ret)
-		actual_out_nbytes = *actual_out_nbytes_ret;
-	else
-		actual_out_nbytes = out_nbytes_avail;
+    actual_out_nbytes = *actual_out_nbytes_ret;
 
 	in_next = in_end - GZIP_FOOTER_SIZE;
 
 	/* CRC32 */
-	if (libdeflate_crc32(0, out, actual_out_nbytes) !=
-	    get_unaligned_le32(in_next))
-		return LIBDEFLATE_BAD_DATA;
-	in_next += 4;
+//	if (libdeflate_crc32(0, out, actual_out_nbytes) !=
+//	    get_unaligned_le32(in_next))
+//		return LIBDEFLATE_BAD_DATA;
+//	in_next += 4;
 
 	/* ISIZE */
-	if ((u32)actual_out_nbytes != get_unaligned_le32(in_next))
+	if (actual_out_nbytes != decoded_size)
 		return LIBDEFLATE_BAD_DATA;
 
 	return LIBDEFLATE_SUCCESS;
