@@ -1479,7 +1479,7 @@ public:
 #ifdef DEBUG_SKIPPING
                     std::string buf_str = reinterpret_cast<const char *>(buffer);
                     for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    fprintf(stderr,"after parsing, prior to jump of length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+                    fprintf(stderr,"after parsing, prior to jump with read length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
 #endif
                     unsigned previous_i = i; 
                     skip_quality_and_header(i, current_sequence.size());
@@ -1500,12 +1500,12 @@ public:
 
 #ifdef DEBUG_SKIPPING
                     for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    fprintf(stderr,"after parsing, after jump,                  pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+                    fprintf(stderr,"after parsing, after jump,                         pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
 #endif
                 }
                 else
                 {
-                    if (current_sequence.size() > 0)
+                    if (current_sequence.size() > header_ends_with_dna) // very basic, could be refined
                     {
                         // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
                         std::string prev = "none";
@@ -1516,6 +1516,7 @@ public:
                         incomplete_context = true;
                         break;
                     }
+                    current_sequence = "";
                     i++;
                 }
             }
@@ -1690,6 +1691,7 @@ public:
     // some info to help fastq parsing
     unsigned header_length;
     unsigned quality_header_length;
+    unsigned header_ends_with_dna;
     
     unsigned previous_rewind; // amount of bytes to rewind due to parsing of previous block
 
@@ -1907,7 +1909,7 @@ void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
 
 /* sets some parameters based on decompression of the first block
  */
-void estimate_file_structure(struct libdeflate_decompressor * restrict d, const byte * restrict const in, size_t in_nbytes, unsigned &header_length, unsigned &quality_header_length)
+void estimate_file_structure(struct libdeflate_decompressor * restrict d, const byte * restrict const in, size_t in_nbytes, unsigned &header_length, unsigned &quality_header_length, unsigned &header_ends_with_dna)
 {
     // very basic, decompress first block
     bool dummy;
@@ -1922,6 +1924,7 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     int first_readlen = 0;
     quality_header_length = 0;
     header_length = 0;
+    header_ends_with_dna = 0;
     while (beg[i++] != '\n')    header_length++;
     while (beg[i++] != '\n')    first_readlen++;
     while (beg[i++] != '\n')    quality_header_length++;
@@ -1931,6 +1934,18 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     // see for instance:
     // python scripts/test_hypothesis_header_size.py /nvme/fastq/ERA983635-LMS1-C1.fastq.gz
     header_length -= 4;
+
+    // heuristic: if header finishes with some DNA sequences, record how many. we'll allow this many skips during parsnig
+    for (unsigned j = header_length; j > 0; j--)
+    {
+        if (ascii2Dna[beg[j]] > 0)
+            header_ends_with_dna++;
+    }
+    if (header_ends_with_dna)
+    {
+        fprintf(stderr,"noticed that header ends with %d nucleotides\n",header_ends_with_dna);
+        header_ends_with_dna += 2; // fuzzy
+    }
 }
 
 // Original API:
@@ -1951,7 +1966,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     InstrDeflateWindow out_window(out, out_end);
     InstrDeflateWindow backup_out(out, out_end);
 
-    estimate_file_structure(d, in, in_nbytes, out_window.header_length, out_window.quality_header_length);
+    estimate_file_structure(d, in, in_nbytes, out_window.header_length, out_window.quality_header_length, out_window.header_ends_with_dna);
 
     // blocks counter
     int failed_decomp_counter = 0;
