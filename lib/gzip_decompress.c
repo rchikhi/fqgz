@@ -42,7 +42,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
     const u8 * const in_begin = in;
 	const u8 * const in_end = in_next + in_nbytes;
 	u8 flg;
-	size_t actual_out_nbytes;
+	size_t actual_out_nbytes = 0;
 	enum libdeflate_result result;
 
 	if (in_nbytes < GZIP_MIN_OVERHEAD)
