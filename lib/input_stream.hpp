@@ -2,6 +2,7 @@
 #define INPUT_STREAM_HPP
 
 #include <cstring> // memcpy
+#include <type_traits>
 
 #include "common_defs.h"
 #include "assert.hpp"
@@ -256,7 +257,18 @@ class InputStream
      * Copy n bytes to the ouput buffer. The input buffer must be aligned with a
      * call to align_input()
      */
-    inline void copy(byte* restrict out, size_t n)
+    template<typename char_t>
+    inline void copy(char_t* restrict out, size_t n)
+    {
+        // This version support characters representation in output stream wider than bytes
+        assert(available() >= n);
+        for (unsigned i = 0; i < n; i++)
+            out[i] = char_t(in_next[i]);
+        in_next += n;
+    }
+
+    template<typename char_t>
+    inline auto copy(char* restrict out, size_t n) -> std::enable_if_t<sizeof(char_t) == 1, void>
     {
         assert(available() >= n);
         memcpy(out, in_next, n);
