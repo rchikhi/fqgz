@@ -4,7 +4,7 @@
 #include <atomic>
 
 
-/// Keep track of where to end the deconding in the current thread
+/// Keep track of where to end the decoding in the current thread
 struct alignas(64) synchronizer {
 
     // Post method

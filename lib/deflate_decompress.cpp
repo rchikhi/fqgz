@@ -1452,8 +1452,7 @@ public:
         // invariant: we're at the beginning of a DNA sequence in the fastq file
         while (i < size())
         {
-            bool after_current_block = i >= current_blk - buffer; // FIXME: sync parser such that this is always true
-            if(stop != nullptr && last_block && after_current_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
+            if(stop != nullptr && last_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
             {
                  fprintf(stderr,"reached first seq decoded by next thread\n");
                  break; // We reached the first sequence decoded by the next thread
@@ -1474,8 +1473,7 @@ public:
                     current_sequence_pos = i - current_sequence.size();
                     // Record the position of the first decoded sequence relative to the block start
                     // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
-                    if(after_current_block) // FIXME: sync parser such that is always true
-                        first_seq_block_pos = current_sequence_pos - (current_blk - buffer);
+                    first_seq_block_pos = current_sequence_pos - (current_blk - buffer); 
 
 //#define DEBUG_SKIPPING
 #ifdef DEBUG_SKIPPING
@@ -1536,7 +1534,7 @@ public:
 
         PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (!incomplete_context) {
-            PRINT_DEBUG("fully reconstructed %d reads\n", nb_reads); // continuation of heuristic
+            PRINT_DEBUG("fully reconstructed, %d reads\n", nb_reads); // continuation of heuristic
         } else {
             PRINT_DEBUG("incomplete, %d reads\n ", nb_reads);
         }
@@ -2022,7 +2020,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                                 pthread_self(), block_inpos, out_window.first_seq_block_pos);
                         prev_sync->signal_first_decoded_sequence(block_inpos, out_window.first_seq_block_pos);
                     }
-                    fprintf(stderr,"successfully decoded reads at decoded block %ld\n",decoded_blocks);
+                    fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld\n",decoded_blocks);
                 }
             }
 
