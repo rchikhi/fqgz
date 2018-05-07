@@ -1511,7 +1511,8 @@ public:
                         std::string prev = "none";
                         if (putative_sequences.size() > 0)
                             prev = putative_sequences[putative_sequences.size()-1];
-                        fprintf(stderr,"incomplete context, reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
+                        if (fully_reconstructed)
+                            fprintf(stderr,"parsing error or incomplete context; reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
                         incomplete_context = true;
                         break;
                     }
@@ -1544,7 +1545,7 @@ public:
             for (auto seq: putative_sequences)
                 printf("%s\n",seq.c_str());
         }
-        fully_reconstructed |= !incomplete_context;
+        fully_reconstructed = !incomplete_context;
 
         DEBUG_FIRST_BLOCK(exit(1);)
     }
@@ -2010,17 +2011,22 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
             if (skip_counter == 0)
             {
-                bool previously_not_reconstructed = !out_window.fully_reconstructed;
+                bool previously_reconstructed = out_window.fully_reconstructed;
 
                 out_window.parse_block(stop, is_final_block);
 
-                if (previously_not_reconstructed && out_window.fully_reconstructed) {
+                if ((!previously_reconstructed) && out_window.fully_reconstructed) {
                     if(prev_sync != nullptr) {
                         fprintf(stderr, "Thread %lu found it's first sequence in block %lu at position %u\n",
                                 pthread_self(), block_inpos, out_window.first_seq_block_pos);
                         prev_sync->signal_first_decoded_sequence(block_inpos, out_window.first_seq_block_pos);
                     }
                     fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld\n",decoded_blocks);
+                }
+                
+                if (previously_reconstructed && (!out_window.fully_reconstructed)) {
+                    fprintf(stderr,"argh! we thought we had a complete context but actually decoded block %ld didn't parse well\n",decoded_blocks);
+                    exit(1);
                 }
             }
 
