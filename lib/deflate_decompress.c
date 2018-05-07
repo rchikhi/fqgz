@@ -48,6 +48,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "deflate_constants.h"
 #include "unaligned.h"
@@ -794,6 +795,21 @@ static forceinline void
 copy_word_unaligned(const void *src, void *dst)
 {
 	store_word_unaligned(load_word_unaligned(src), dst);
+}
+
+
+static forceinline size_t
+flush(void * restrict _out, u8** out_next_ptr, size_t keep_size) {
+    u8 *out = _out;
+    u8 *out_next = *out_next_ptr;
+
+    size_t dump_size = (out_next - out) - keep_size;
+    if(write(1, out, dump_size) != dump_size) exit(1);
+
+    memcpy(out, out_next - keep_size, keep_size);
+
+    *out_next_ptr = out + keep_size;
+    return dump_size;
 }
 
 /*****************************************************************************

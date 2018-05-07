@@ -206,8 +206,10 @@ next_block:
 		nlen = READ_U16();
 
 		SAFETY_CHECK(len == (u16)~nlen);
-		if (unlikely(len > out_end - out_next))
-			return LIBDEFLATE_INSUFFICIENT_SPACE;
+                if (unlikely(len > out_end - out_next)) {
+                    *actual_out_nbytes_ret += flush(out, &out_next, 1UL<<15);
+                }
+
 		SAFETY_CHECK(len <= in_end - in_next);
 
 		memcpy(out_next, in_next, len);
@@ -267,8 +269,9 @@ next_block:
 		REMOVE_BITS(entry & HUFFDEC_LENGTH_MASK);
 		if (entry & HUFFDEC_LITERAL) {
 			/* Literal  */
-			if (unlikely(out_next == out_end))
-				return LIBDEFLATE_INSUFFICIENT_SPACE;
+			if (unlikely(out_next == out_end)) {
+                            *actual_out_nbytes_ret += flush(out, &out_next, 1UL<<15);
+                        }
 			*out_next++ = (u8)(entry >> HUFFDEC_RESULT_SHIFT);
 			continue;
 		}
@@ -290,9 +293,11 @@ next_block:
 		 * SIZE_MAX.  */
 		STATIC_ASSERT(HUFFDEC_END_OF_BLOCK_LENGTH == 0);
 		if (unlikely((size_t)length - 1 >= out_end - out_next)) {
-			if (unlikely(length != HUFFDEC_END_OF_BLOCK_LENGTH))
-				return LIBDEFLATE_INSUFFICIENT_SPACE;
-			goto block_done;
+			if (unlikely(length != HUFFDEC_END_OF_BLOCK_LENGTH)) {
+                            *actual_out_nbytes_ret += flush(out, &out_next, 1UL<<15);
+                        } else {
+                            goto block_done;
+                        }
 		}
 
 		/* Decode the match offset.  */
@@ -393,12 +398,7 @@ block_done:
 		goto next_block;
 
 	/* That was the last block.  */
+        *actual_out_nbytes_ret += flush(out, &out_next, 0);
 
-	if (actual_out_nbytes_ret) {
-		*actual_out_nbytes_ret = out_next - (u8 *)out;
-	} else {
-		if (out_next != out_end)
-			return LIBDEFLATE_SHORT_OUTPUT;
-	}
 	return LIBDEFLATE_SUCCESS;
 }

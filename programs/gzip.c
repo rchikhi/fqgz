@@ -188,7 +188,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 	const u8 *compressed_data = in->mmap_mem;
 	size_t compressed_size = in->mmap_size;
 	void *uncompressed_data = NULL;
-	size_t uncompressed_size;
+	size_t out_alloc_size = 1UL << 27;
 	enum libdeflate_result result;
 	int ret;
 
@@ -198,9 +198,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 	       goto out;
 	}
 
-	uncompressed_size = load_u32_gzip(&compressed_data[compressed_size - 4]);
-
-	uncompressed_data = xmalloc(uncompressed_size);
+	uncompressed_data = xmalloc(out_alloc_size);
 	if (uncompressed_data == NULL) {
 		msg("%"TS": file is probably too large to be processed by this "
 		    "program", in->name);
@@ -212,7 +210,7 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 					    compressed_data,
 					    compressed_size,
 					    uncompressed_data,
-					    uncompressed_size, NULL);
+					    out_alloc_size, NULL);
 
 	if (result == LIBDEFLATE_INSUFFICIENT_SPACE) {
 		msg("%"TS": file corrupt or too large to be processed by this "
@@ -227,7 +225,6 @@ do_decompress(struct libdeflate_decompressor *decompressor,
 		goto out;
 	}
 
-	ret = full_write(out, uncompressed_data, uncompressed_size);
 out:
 	free(uncompressed_data);
 	return ret;
@@ -495,7 +492,7 @@ tmain(int argc, tchar *argv[])
 	options.to_stdout = false;
 	options.decompress = is_gunzip();
 	options.force = false;
-	options.keep = false;
+	options.keep = true;
 	options.compression_level = 6;
 	options.suffix = T(".gz");
 
