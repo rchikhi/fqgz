@@ -2039,7 +2039,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld\n",decoded_blocks);
                 }
                 
-                if (previously_reconstructed && (!out_window.fully_reconstructed)) {
+                if (previously_reconstructed && (!out_window.fully_reconstructed) && (!is_final_block /* needed because final window will be flagged*/)) {
                     fprintf(stderr,"argh! we thought we had a complete context but actually decoded block %ld didn't parse well\n",decoded_blocks);
                     exit(1);
                 }
