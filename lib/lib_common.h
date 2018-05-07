@@ -6,8 +6,8 @@
 #define LIB_LIB_COMMON_H
 
 #ifdef LIBDEFLATE_H
-#  error "lib_common.h must always be included before libdeflate.h"
-   /* because BUILDING_LIBDEFLATE must be set first */
+#    error "lib_common.h must always be included before libdeflate.h"
+/* because BUILDING_LIBDEFLATE must be set first */
 #endif
 
 #define BUILDING_LIBDEFLATE
@@ -25,11 +25,11 @@
  * Also note that this fixup has no useful effect when libdeflate is built as a
  * shared library, since these symbols are not exported.
  */
-#define SYM_FIXUP(sym)			_libdeflate_##sym
-#define aligned_malloc			SYM_FIXUP(aligned_malloc)
-#define aligned_free			SYM_FIXUP(aligned_free)
-#define deflate_get_compression_level	SYM_FIXUP(deflate_get_compression_level)
-#define _x86_cpu_features		SYM_FIXUP(_x86_cpu_features)
-#define x86_setup_cpu_features		SYM_FIXUP(x86_setup_cpu_features)
+#define SYM_FIXUP(sym) _libdeflate_##sym
+#define aligned_malloc SYM_FIXUP(aligned_malloc)
+#define aligned_free SYM_FIXUP(aligned_free)
+#define deflate_get_compression_level SYM_FIXUP(deflate_get_compression_level)
+#define _x86_cpu_features SYM_FIXUP(_x86_cpu_features)
+#define x86_setup_cpu_features SYM_FIXUP(x86_setup_cpu_features)
 
 #endif /* LIB_LIB_COMMON_H */

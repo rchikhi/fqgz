@@ -36,133 +36,135 @@
 #include <thread>
 
 template<typename T>
-bool is_set(T word, T flag) { return word & flag != T{0} ; }
+bool
+is_set(T word, T flag)
+{
+    return word & flag != T{ 0 };
+}
 
 LIBDEFLATEAPI enum libdeflate_result
-libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
-                           const byte *in, size_t in_nbytes,
-                           byte *out, size_t out_nbytes_avail,
-                           size_t *actual_out_nbytes_ret,
+libdeflate_gzip_decompress(struct libdeflate_decompressor* d,
+                           const byte* in,
+                           size_t in_nbytes,
+                           byte* out,
+                           size_t out_nbytes_avail,
+                           size_t* actual_out_nbytes_ret,
                            unsigned nthreads,
-                           size_t skip, size_t until)
+                           size_t skip,
+                           size_t until)
 {
-	const byte *in_next = in;
-	const byte * const in_end = in_next + in_nbytes;
-	byte flg;
-//	size_t actual_out_nbytes;
-	enum libdeflate_result result;
+    const byte* in_next = in;
+    const byte* const in_end = in_next + in_nbytes;
+    byte flg;
+    //	size_t actual_out_nbytes;
+    enum libdeflate_result result;
 
-	if (in_nbytes < GZIP_MIN_OVERHEAD)
-		return LIBDEFLATE_BAD_DATA;
+    if (in_nbytes < GZIP_MIN_OVERHEAD)
+        return LIBDEFLATE_BAD_DATA;
 
-	/* ID1 */
-	if (*in_next++ != GZIP_ID1)
-		return LIBDEFLATE_BAD_DATA;
-	/* ID2 */
-	if (*in_next++ != GZIP_ID2)
-		return LIBDEFLATE_BAD_DATA;
-	/* CM */
-	if (*in_next++ != GZIP_CM_DEFLATE)
-		return LIBDEFLATE_BAD_DATA;
-	flg = *in_next++;
-	/* MTIME */
-	in_next += 4;
-	/* XFL */
-	in_next += 1;
-	/* OS */
-	in_next += 1;
+    /* ID1 */
+    if (*in_next++ != GZIP_ID1)
+        return LIBDEFLATE_BAD_DATA;
+    /* ID2 */
+    if (*in_next++ != GZIP_ID2)
+        return LIBDEFLATE_BAD_DATA;
+    /* CM */
+    if (*in_next++ != GZIP_CM_DEFLATE)
+        return LIBDEFLATE_BAD_DATA;
+    flg = *in_next++;
+    /* MTIME */
+    in_next += 4;
+    /* XFL */
+    in_next += 1;
+    /* OS */
+    in_next += 1;
 
-	if (bool(flg & GZIP_FRESERVED))
-		return LIBDEFLATE_BAD_DATA;
+    if (bool(flg & GZIP_FRESERVED))
+        return LIBDEFLATE_BAD_DATA;
 
-	/* Extra field */
-	if (bool(flg & GZIP_FEXTRA)) {
-		u16 xlen = get_unaligned_le16(in_next);
-		in_next += 2;
+    /* Extra field */
+    if (bool(flg & GZIP_FEXTRA)) {
+        u16 xlen = get_unaligned_le16(in_next);
+        in_next += 2;
 
-		if (in_end - in_next < (u32)xlen + GZIP_FOOTER_SIZE)
-			return LIBDEFLATE_BAD_DATA;
+        if (in_end - in_next < (u32)xlen + GZIP_FOOTER_SIZE)
+            return LIBDEFLATE_BAD_DATA;
 
-		in_next += xlen;
-	}
+        in_next += xlen;
+    }
 
-	/* Original file name (zero terminated) */
-	if (bool(flg & GZIP_FNAME)) {
-		while (*in_next++ != byte(0) && in_next != in_end)
-			;
-		if (in_end - in_next < GZIP_FOOTER_SIZE)
-			return LIBDEFLATE_BAD_DATA;
-	}
+    /* Original file name (zero terminated) */
+    if (bool(flg & GZIP_FNAME)) {
+        while (*in_next++ != byte(0) && in_next != in_end)
+            ;
+        if (in_end - in_next < GZIP_FOOTER_SIZE)
+            return LIBDEFLATE_BAD_DATA;
+    }
 
-	/* File comment (zero terminated) */
-	if (bool(flg & GZIP_FCOMMENT)) {
-		while (*in_next++ != byte(0) && in_next != in_end)
-			;
-		if (in_end - in_next < GZIP_FOOTER_SIZE)
-			return LIBDEFLATE_BAD_DATA;
-	}
+    /* File comment (zero terminated) */
+    if (bool(flg & GZIP_FCOMMENT)) {
+        while (*in_next++ != byte(0) && in_next != in_end)
+            ;
+        if (in_end - in_next < GZIP_FOOTER_SIZE)
+            return LIBDEFLATE_BAD_DATA;
+    }
 
-	/* CRC16 for gzip header */
-	if (bool(flg & GZIP_FHCRC)) {
-		in_next += 2;
-		if (in_end - in_next < GZIP_FOOTER_SIZE)
-			return LIBDEFLATE_BAD_DATA;
-	}
+    /* CRC16 for gzip header */
+    if (bool(flg & GZIP_FHCRC)) {
+        in_next += 2;
+        if (in_end - in_next < GZIP_FOOTER_SIZE)
+            return LIBDEFLATE_BAD_DATA;
+    }
 
-        nthreads = std::min(1 + unsigned(in_nbytes >> 26), nthreads);
-        if(nthreads <= 1) {
-            /* Compressed data  */
-            result = libdeflate_deflate_decompress(d, in_next,
-                                            in_end - GZIP_FOOTER_SIZE - in_next,
-                                            out, out_nbytes_avail,
-                                            actual_out_nbytes_ret, nullptr, nullptr, skip, until);
-        } else {
-            std::vector<std::thread> threads; threads.reserve(nthreads);
-            std::vector<synchronizer> syncs(nthreads-1);
+    nthreads = std::min(1 + unsigned(in_nbytes >> 26), nthreads);
+    if (nthreads <= 1) {
+        /* Compressed data  */
+        result = libdeflate_deflate_decompress(
+          d, in_next, in_end - GZIP_FOOTER_SIZE - in_next, out, out_nbytes_avail, actual_out_nbytes_ret, nullptr, nullptr, skip, until);
+    } else {
+        std::vector<std::thread> threads;
+        threads.reserve(nthreads);
+        std::vector<synchronizer> syncs(nthreads - 1);
 
-            size_t first_chunk_size = ((in_end - in_next) - skip)/nthreads + (1UL << 24);
-            size_t chunk_size = ((in_end - in_next) - first_chunk_size)/(nthreads-1);
+        size_t first_chunk_size = ((in_end - in_next) - skip) / nthreads + (1UL << 24);
+        size_t chunk_size = ((in_end - in_next) - first_chunk_size) / (nthreads - 1);
 
-            size_t start = skip;
-            synchronizer* prev_sync = nullptr;
-            for(unsigned i=0; i < nthreads; i++) {
-                synchronizer* stop = i < nthreads-1 ? &syncs[i] : nullptr;
+        size_t start = skip;
+        synchronizer* prev_sync = nullptr;
+        for (unsigned i = 0; i < nthreads; i++) {
+            synchronizer* stop = i < nthreads - 1 ? &syncs[i] : nullptr;
 
-                threads.emplace_back([=](){
-                    libdeflate_decompressor* local_d = libdeflate_copy_decompressor(d);
+            threads.emplace_back([=]() {
+                libdeflate_decompressor* local_d = libdeflate_copy_decompressor(d);
 
-                    enum libdeflate_result local_result = libdeflate_deflate_decompress(
-                                local_d, in_next,
-                                in_end - GZIP_FOOTER_SIZE - in_next,
-                                out, out_nbytes_avail,
-                                actual_out_nbytes_ret,
-                                stop, prev_sync,
-                                start, until);
+                enum libdeflate_result local_result = libdeflate_deflate_decompress(
+                  local_d, in_next, in_end - GZIP_FOOTER_SIZE - in_next, out, out_nbytes_avail, actual_out_nbytes_ret, stop, prev_sync, start, until);
 
-                    if (local_result != LIBDEFLATE_SUCCESS)
-                        exit(LIBDEFLATE_SUCCESS); //FIXME: use futures to pass result
+                if (local_result != LIBDEFLATE_SUCCESS)
+                    exit(LIBDEFLATE_SUCCESS); // FIXME: use futures to pass result
 
-                    libdeflate_free_decompressor(local_d);
-                });
+                libdeflate_free_decompressor(local_d);
+            });
 
-                prev_sync = stop;
-                start += i == 0 ? first_chunk_size : chunk_size;
-            }
-
-            for(auto& thread : threads) thread.join();
-
-            result = LIBDEFLATE_SUCCESS;
+            prev_sync = stop;
+            start += i == 0 ? first_chunk_size : chunk_size;
         }
 
-	if (result != LIBDEFLATE_SUCCESS)
-		return result;
+        for (auto& thread : threads)
+            thread.join();
 
-//	if (actual_out_nbytes_ret)
-//		actual_out_nbytes = *actual_out_nbytes_ret;
-//	else
-//		actual_out_nbytes = out_nbytes_avail;
+        result = LIBDEFLATE_SUCCESS;
+    }
 
-	in_next = in_end - GZIP_FOOTER_SIZE;
+    if (result != LIBDEFLATE_SUCCESS)
+        return result;
+
+    //	if (actual_out_nbytes_ret)
+    //		actual_out_nbytes = *actual_out_nbytes_ret;
+    //	else
+    //		actual_out_nbytes = out_nbytes_avail;
+
+    in_next = in_end - GZIP_FOOTER_SIZE;
 
     // Rayan: skipping those checks as we may not be decompressing the whole file
 #if 0
@@ -177,5 +179,5 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor *d,
 		return LIBDEFLATE_BAD_DATA;
 #endif
 
-	return LIBDEFLATE_SUCCESS;
+    return LIBDEFLATE_SUCCESS;
 }
