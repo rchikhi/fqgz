@@ -42,13 +42,21 @@ HARD_LINKS        := 1
 AR := gcc-ar
 
 #debugging options for decompression (Rayan)
+# some general-purpose block-level debug, useful to trace block seeks and block size
 ifeq ($(deb),1)
 	 LIB_CFLAGS+= -DDEB=1
 endif
 
+# very verbose output to print whole decompression process of first block
 ifeq ($(first),1)
 	 LIB_CFLAGS+= -DFIRST_BLOCK=1
 endif
+
+# print to stderr the whole buffer before it is parsed
+ifeq ($(buf),1)
+	 LIB_CFLAGS+= -DDEBUG_BUFFER=1
+endif
+
 
 
 

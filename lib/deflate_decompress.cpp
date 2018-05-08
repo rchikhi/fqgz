@@ -1453,9 +1453,11 @@ public:
         //std::string buf_str = reinterpret_cast<const char *>(buffer);
         //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
         //fprintf(stderr,"beginning of block, pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
-        
+
+#ifdef DEBUG_BUFFER
         // print whole block!
-        //std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += std::to_string(buffer_counts[j]); } fprintf(stderr,"buffer: %s\n",buf_str.c_str());
+        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += std::to_string(buffer_counts[j]); } fprintf(stderr,"buffer: %s\n",buf_str.c_str());
+#endif
 
         find_stretches_of_dna_and_unresolved_chars(i, putative_sequences, min_read_length, last_block);
 
