@@ -1158,7 +1158,6 @@ public:
     /// Move the 32K context to the start of the buffer
     size_t flush(size_t window_size=1UL<<15) {
         assert(size() >= window_size);
-        assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
         memmove(buffer, next - window_size, window_size);
         size_t moved_by = (next - window_size) - buffer;
         
@@ -1248,12 +1247,9 @@ public:
         next = buffer+(1<<15);
         current_blk = next;
 
-        for (int i = 0; i < (1<<15); i ++)
-        {
-           buffer_counts[i] = 0; // FIXME: was commented before, but maybe for a good reason (Mael, do you know?) anyway I decommented it
-        }
         block_size = 0;
         previous_rewind = 0;
+        nb_reads_printed = 0;
     }
 
     // record into a dedicated buffer that store counts of back references
@@ -1391,148 +1387,109 @@ public:
         return (c == '\n' || (c == '|' && buffer_counts[i] > 100));
     }
 
-    // we're at the end of a sequence, i == the position of the \n
-    // try to get to the beginning of a next one
-    // assumes a few things:
-    // header length only increases compared to the first measured header length
-    // same for quality header length
-    void skip_quality_and_header(unsigned &i, int readlen)
+   void find_stretches_of_dna_and_unresolved_chars(unsigned &i, std::vector<std::string> &putative_sequences, unsigned min_read_length, bool last_block)
     {
-        i ++; // skip that \n
-        i += quality_header_length; // the quality + and the (likely empty) quality header
-        while (!is_likely_separator(i++)) {} // go after the \n after quality header
-        i += readlen;  // the quality seq
-        while (!is_likely_separator(i++)) {} // go after the \n after quality seq
-        i += header_length; // the header 
-        while (!is_likely_separator(i++)) {} // go after the \n after header
+        std::string current_sequence = "";
+        do
+        {
+            // jump to next dna position
+            while (ascii2Dna[buffer[i]] == 0 && i < size()) {i++;}
+
+            // while it's dna or |, record
+            while ((ascii2Dna[buffer[i]] > 0 || buffer[i] == '|') && (i < size()))
+            {
+                //fprintf(stderr,"parsing dna char %c, so far %s\n",buffer[i],current_sequence.c_str());
+                current_sequence += buffer[i];
+                i++;
+            }
+
+            // trim trailing |'s
+            if (current_sequence.size() >= min_read_length)
+            {
+                unsigned j = current_sequence.size()-1;
+                while (current_sequence[j] == '|' && (j > 0)) {j--;}
+                current_sequence = current_sequence.substr(0,j+1);
+            }
+
+            // end of block? record offset instead of outputting sequence
+            if (unlikely(i == size() && current_sequence.size() > 0 && (!last_block)))
+            {
+                // lets not insert that sequence and keep it for the next block
+                previous_rewind = current_sequence.size(); // record how many chars to go back, in next block
+                        // uncomment this for some debugging
+                        //std::string buf_str = reinterpret_cast<const char *>(buffer);
+                        //fprintf(stderr,"we think a good rewind location is -%d: %s[>]%s\n",
+                        //previous_rewind,buf_str.substr(size()-previous_rewind-20,20).c_str(),
+                        //buf_str.substr(size()-previous_rewind,std::min((unsigned)size()-20,(unsigned)20)).c_str());
+                break;
+            }
+
+            if (current_sequence.size() >= min_read_length)
+            {
+                putative_sequences.push_back(current_sequence);
+            }
+            current_sequence = "";
+        }
+        while (i < size());
     }
 
-    // parse sequences in block, decide if it's fully reconstructed
+    // parse sequences in block, decide if it's fully reconstructed, if so, output all reads
     void parse_block(synchronizer* stop, bool last_block)
     {
         unsigned min_read_length = 35; 
-       long int start_pos = size()-block_size;
+        long int start_pos = size()-block_size;
 
         // get_sequences_between_separators(); inlined
         std::vector<std::string> putative_sequences;
         std::string current_sequence = ""; current_sequence.reserve(256);
-        unsigned current_sequence_pos = start_pos;
 
         bool incomplete_context = false;
 
         unsigned i = start_pos - previous_rewind;
         previous_rewind = 0;
 
+        // print just beginning of block
         //std::string buf_str = reinterpret_cast<const char *>(buffer);
         //for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
         //fprintf(stderr,"beginning of block, pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
+        
+        // print whole block!
+        //std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += std::to_string(buffer_counts[j]); } fprintf(stderr,"buffer: %s\n",buf_str.c_str());
 
-        if (has_dummy_32k) // first block?
+        find_stretches_of_dna_and_unresolved_chars(i, putative_sequences, min_read_length, last_block);
+
+        for (auto seq: putative_sequences)
         {
-            // in case this is the first block, we don't know where to start.
-            // heuristic: go to the _second_ stretch of min_read_length bases, to avoid starting within a quality, or within a truncated seq, because then parser is fragile
-            int repeat = 1;
-            while (repeat++ < 2)
+            for (unsigned j = 0; j < seq.size(); j++)
             {
-                unsigned stretch = 0;
-                while ((i < size()) && (stretch++) < min_read_length) 
+                if (seq[j] == '|')
                 {
-                    if (ascii2Dna[buffer[i++]] == 0) stretch=0;
-                }
-                if ( i == size()) // no sequences
-                {
-                    fprintf(stderr,"buffer doesnt contain any >= %d bp dna sequences", min_read_length);
-                    fully_reconstructed = false;
-                    return;            
-                }
-            }
-            i -= min_read_length;
-        }
-
-        // invariant: we're at the beginning of a DNA sequence in the fastq file
-        while (i < size())
-        {
-            if(stop != nullptr && last_block && stop->caught_up_first_seq(i - (current_blk - buffer)))
-            {
-                 fprintf(stderr,"reached first seq decoded by next thread\n");
-                 break; // We reached the first sequence decoded by the next thread
-            }
-
-            unsigned char c = buffer[i];
-            if (ascii2Dna[c] > 0)
-            {
-                //fprintf(stderr,"parsing dna char %c, so far %s\n",c,current_sequence.c_str());
-                current_sequence += c;
-                i++;
-            }
-            else
-            {
-                bool is_separator = is_likely_separator(i);
-                if (is_separator && current_sequence.size() >= min_read_length /* avoid false stretches */)
-                {
-                    current_sequence_pos = i - current_sequence.size();
-                    // Record the position of the first decoded sequence relative to the block start
-                    // Note: this won't be used untill fully_reconstructed is turned on, so no risks of putting garbage here
-                    first_seq_block_pos = current_sequence_pos - (current_blk - buffer); 
-
-//#define DEBUG_SKIPPING
-#ifdef DEBUG_SKIPPING
-                    std::string buf_str = reinterpret_cast<const char *>(buffer);
-                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    fprintf(stderr,"after parsing, prior to jump with read length %3u, pos %6u: %s[>]%s\n",(unsigned)current_sequence.size(),i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
-#endif
-                    unsigned previous_i = i; 
-                    skip_quality_and_header(i, current_sequence.size());
-
-                    if (i >= size() && (!last_block)) // went past buffer, no chance to read more sequence
+                    if (fully_reconstructed)
                     {
-                        // lets not insert that sequence and keep it for the next block
-                        previous_rewind = (size() - previous_i) + current_sequence.size(); // record how many chars to go back, in next block
-                        //fprintf(stderr,"we think a good rewind location is -%d: %s[>]%s\n",previous_rewind,buf_str.substr(size()-previous_rewind-20,20).c_str(),buf_str.substr(size()-previous_rewind,std::min((unsigned)size()-20,(unsigned)20)).c_str());
-                        break; 
+                        //fprintf(stderr,"suspicious seq: %s\n",seq.c_str());
+                        unsolved_reads.push_back(seq);
                     }
                     else
                     {
-                        //fprintf(stderr,"found separator after dna, have parsed read number %d: %s\n",(uint32_t)(putative_sequences.size()),current_sequence.c_str());
-                        putative_sequences.push_back(current_sequence);
-                        current_sequence = "";
-                    }
-
-#ifdef DEBUG_SKIPPING
-                    for (int j = 0; j < 40; j ++) if (buf_str[i-20+j] == '\n') buf_str[i-20+j] ='!';
-                    fprintf(stderr,"after parsing, after jump,                         pos %6u: %s[>]%s\n",i,buf_str.substr(i-20,20).c_str(),buf_str.substr(i,20).c_str());
-#endif
-                }
-                else
-                {
-                    if (current_sequence.size() > header_ends_with_dna) // very basic, could be refined
-                    {
-                        // when we're parsing DNA and notice that the next character isn't a \n, likely the context is incomplete
-                        std::string prev = "none";
-                        if (putative_sequences.size() > 0)
-                            prev = putative_sequences[putative_sequences.size()-1];
-                        if (fully_reconstructed)
-                            fprintf(stderr,"parsing error or incomplete context; reached character %c; cur seq %s; seq before: %s\n",c,current_sequence.c_str(),prev.c_str());
                         incomplete_context = true;
-                        break;
+                        previous_rewind = 0;
                     }
-                    current_sequence = "";
-                    i++;
                 }
             }
-            
         }
-      
-        if (previous_rewind == 0)
-            previous_rewind = current_sequence.size();
-
+              
         int nb_reads = putative_sequences.size();
+
 #ifdef DEB
         //pretty_print();
 #endif
 
-        if (nb_reads < 10) // heuristic
+        if (nb_reads < 10 && (!last_block)) // heuristic
+        {
+            if (fully_reconstructed)
+                fprintf(stderr,"went from fully reconstructed to incomplete due to low number of reads (%d), buffer size %d\n", nb_reads, (int)(next-buffer));
             incomplete_context = true;
+        }
 
         PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (!incomplete_context) {
@@ -1544,7 +1501,10 @@ public:
         if (!incomplete_context)
         { 
             for (auto seq: putative_sequences)
+            {
+                nb_reads_printed ++; // record this for later
                 printf("%s\n",seq.c_str());
+            }
         }
         fully_reconstructed = !incomplete_context;
 
@@ -1671,8 +1631,27 @@ public:
         flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
 
+    void output_unsolved_reads()
+    {
+        std::string read;
+        for (unsigned i = 0; i < unsolved_reads.size(); i++)
+        {
+            std::string t = unsolved_reads[i];
+            if (t == "")
+                printf("%s\n",read.c_str());
+            else
+                read += t;
+        }
+    }
+
+    void final_stats()
+    {
+        fprintf(stderr,"done, printed %d reads\n",nb_reads_printed);
+        if (unsolved_reads.size() > 0)
+            fprintf(stderr,"and also didn't print %lu reads containing undetermined characters\n",unsolved_reads.size());
+    }
+
     byte* current_blk;
-    unsigned first_seq_block_pos = ~0U; /// Position of the first sequence relative to the current block start
 
     bool has_dummy_32k; // flag whether the window contains the initial dummy 32k context
     bool output_to_target; // flag whether, during a flush, window content should be copied to target or discarded (when scanning the first 20 blocks)
@@ -1692,9 +1671,12 @@ public:
     unsigned header_length;
     unsigned quality_header_length;
     unsigned header_ends_with_dna;
-    
+    bool     same_readlengths;
+
     unsigned previous_rewind; // amount of bytes to rewind due to parsing of previous block
 
+    std::vector<std::string> unsolved_reads; // reads where context wasn't elucidated, to be solved at the end
+    unsigned nb_reads_printed;
 };
 
 
@@ -1909,7 +1891,7 @@ void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
 
 /* sets some parameters based on decompression of the first block
  */
-void estimate_file_structure(struct libdeflate_decompressor * restrict d, const byte * restrict const in, size_t in_nbytes, unsigned &header_length, unsigned &quality_header_length, unsigned &header_ends_with_dna)
+void estimate_file_structure(struct libdeflate_decompressor * restrict d, const byte * restrict const in, size_t in_nbytes, unsigned &header_length, unsigned &quality_header_length, unsigned &header_ends_with_dna, bool& same_readlengths)
 {
     // very basic, decompress first block
     bool dummy;
@@ -1920,32 +1902,52 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     byte beg[10000]; // assumes reads are shorter than 5kbp
     out_window.dump(beg, 1<<15 /* skip dummy context*/, 10000);
 
-    int i = 0;
-    int first_readlen = 0;
-    quality_header_length = 0;
-    header_length = 0;
-    header_ends_with_dna = 0;
-    while (beg[i++] != '\n')    header_length++;
-    while (beg[i++] != '\n')    first_readlen++;
-    while (beg[i++] != '\n')    quality_header_length++;
-    fprintf(stderr,"estimated header length: %d, quality length: %d\n",header_length,quality_header_length);
+    unsigned i = 0;
+    int first_readlen = 0, readlen, first_headerlen;
+    same_readlengths = true;
 
+    while (i < 5000)
+    {
+        readlen = 0;
+        quality_header_length = 0;
+        header_length = 0;
+        header_ends_with_dna = 0;
+        while (beg[i++] != '\n')    header_length++;
+        while (beg[i++] != '\n')    readlen++;
+        while (beg[i++] != '\n')    quality_header_length++;
+        while (beg[i++] != '\n')    {}
+
+        if (first_readlen == 0)
+        {
+            first_readlen = readlen;
+            first_headerlen = header_length;
+        }
+        else
+        {
+            if (readlen != first_readlen)
+                same_readlengths = false;
+        }
+    }
+    fprintf(stderr,"estimated header length: %d, quality length: %d, ",header_length,quality_header_length);
+    fprintf(stderr,"%s\n",same_readlengths?"same readlengths":"different readlengths");
+
+    // heuristic: if header finishes with some DNA sequences, record how many. we'll allow this many skips during parsnig
+    unsigned j = first_headerlen-1;
+    while (ascii2Dna[beg[j]] > 0 && j >= 0)
+    {
+        header_ends_with_dna++;
+        j--;
+    }
+    if (header_ends_with_dna)
+        fprintf(stderr,"noticed that header ends with %d nucleotides\n",header_ends_with_dna);
+
+    // heuristic
     // in some files, the header is sometimes shorter. let's take that into account
     // see for instance:
     // python scripts/test_hypothesis_header_size.py /nvme/fastq/ERA983635-LMS1-C1.fastq.gz
     header_length -= 4;
 
-    // heuristic: if header finishes with some DNA sequences, record how many. we'll allow this many skips during parsnig
-    for (unsigned j = header_length; j > 0; j--)
-    {
-        if (ascii2Dna[beg[j]] > 0)
-            header_ends_with_dna++;
-    }
-    if (header_ends_with_dna)
-    {
-        fprintf(stderr,"noticed that header ends with %d nucleotides\n",header_ends_with_dna);
-        header_ends_with_dna += 2; // fuzzy
-    }
+ 
 }
 
 // Original API:
@@ -1966,7 +1968,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     InstrDeflateWindow out_window(out, out_end);
     InstrDeflateWindow backup_out(out, out_end);
 
-    estimate_file_structure(d, in, in_nbytes, out_window.header_length, out_window.quality_header_length, out_window.header_ends_with_dna);
+    estimate_file_structure(d, in, in_nbytes, out_window.header_length, out_window.quality_header_length, out_window.header_ends_with_dna, out_window.same_readlengths);
 
     // blocks counter
     int failed_decomp_counter = 0;
@@ -2032,9 +2034,9 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
                 if ((!previously_reconstructed) && out_window.fully_reconstructed) {
                     if(prev_sync != nullptr) {
-                        fprintf(stderr, "Thread %lu found it's first sequence in block %lu at position %u\n",
-                                pthread_self(), block_inpos, out_window.first_seq_block_pos);
-                        prev_sync->signal_first_decoded_sequence(block_inpos, out_window.first_seq_block_pos);
+                        fprintf(stderr, "Thread %lu found it's first sequence in block %lu\n",
+                                pthread_self(), block_inpos);
+                        prev_sync->signal_first_decoded_sequence(block_inpos, 0 /* we don't need to record that anymore, now whole block is decomp or not */);
                     }
                     fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld\n",decoded_blocks);
                 }
@@ -2078,6 +2080,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     *actual_out_nbytes_ret = out_window.get_evicted_length(); // tell how many bytes we actually output
 
+    out_window.final_stats(); // print final stats
 
     return LIBDEFLATE_SUCCESS;
 }

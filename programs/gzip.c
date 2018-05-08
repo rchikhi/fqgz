@@ -413,11 +413,11 @@ tmain(int argc, tchar *argv[])
             break;
 		case 's':
             options.skip = strtoul(toptarg, NULL, 10);
-            fprintf(stderr,"skipping %d bytes (experimental)\n",options.skip);
+            fprintf(stderr,"skipping %lu bytes (experimental)\n",options.skip);
 			break;
 		case 'u':
             options.until = strtoul(toptarg, NULL, 10);
-            fprintf(stderr,"decoding until 20 blocks after compressed position %lld\n",options.until);
+            fprintf(stderr,"decoding until 20 blocks after compressed position %lu\n",options.until);
 			break;
 
 		case 'V':
