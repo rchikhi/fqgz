@@ -1503,6 +1503,12 @@ public:
         { 
             for (auto seq: putative_sequences)
             {
+                // skip undetermined reads
+                bool has_undetermined = false;
+                for (unsigned j = 0; j < seq.size(); j++)
+                   if (seq[j] == '|') { has_undetermined = true; break; }
+                if (has_undetermined) continue;
+
                 nb_reads_printed ++; // record this for later
                 printf("%s\n",seq.c_str());
             }
