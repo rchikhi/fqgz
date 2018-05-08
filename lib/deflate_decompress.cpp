@@ -1435,7 +1435,7 @@ public:
     }
 
     // parse sequences in block, decide if it's fully reconstructed, if so, output all reads
-    void parse_block(synchronizer* stop, bool last_block)
+    void parse_block(unsigned decoded_block, synchronizer* stop, bool last_block)
     {
         unsigned min_read_length = 35; 
         long int start_pos = size()-block_size;
@@ -1456,7 +1456,7 @@ public:
 
 #ifdef DEBUG_BUFFER
         // print whole block!
-        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += std::to_string(buffer_counts[j]); } fprintf(stderr,"buffer: %s\n",buf_str.c_str());
+        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += std::to_string(buffer_counts[j]); } fprintf(stderr,"raw buffer of block %d: %s\n",decoded_block, buf_str.c_str());
 #endif
 
         find_stretches_of_dna_and_unresolved_chars(i, putative_sequences, min_read_length, last_block);
@@ -2034,7 +2034,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             {
                 bool previously_reconstructed = out_window.fully_reconstructed;
 
-                out_window.parse_block(stop, is_final_block);
+                out_window.parse_block(decoded_blocks, stop, is_final_block);
 
                 if ((!previously_reconstructed) && out_window.fully_reconstructed) {
                     if(prev_sync != nullptr) {
