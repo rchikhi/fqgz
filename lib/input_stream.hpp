@@ -154,16 +154,9 @@ class InputStream
     /// Remaining available bits
     size_t available_bits() const { return 8 * available() + bitsleft; }
 
-    /** Position in the stream in bytes
-     * @note align_input() should be called first in order to get accurate readings (or use position_bits() / 8)
+    /** Position in the stream in bits
      */
-    size_t position() const
-    {
-        assert(in_next >= begin);
-        return in_next - begin;
-    }
-
-    size_t position_bits() const { return 8 * position() - bitsleft; }
+    size_t position_bits() const { return 8 * (in_next - begin) - bitsleft; }
 
     /// Seek forward
     void skip(size_t offset)
