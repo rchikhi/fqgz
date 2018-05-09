@@ -1448,7 +1448,7 @@ public:
                     {
                         if (same_readlength == read_length-(j+1))
                         {
-                            fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
+                            //fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
                             start_read = start_read+j+1;
                             read_length = read_length-(j+1);
                             nb_undetermined_parts--;
@@ -1458,7 +1458,7 @@ public:
                         {
                             if (same_readlength == j)
                             {
-                                fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
+                                //fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
                                 read_length = j;
                                 nb_undetermined_parts--;
                                 break;
