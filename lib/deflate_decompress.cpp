@@ -52,6 +52,7 @@
 #include <vector>
 #include <string>
 #include <set>
+#include <tuple>
 
 #include <stdexcept>
 #include <pthread.h>
@@ -1389,52 +1390,88 @@ public:
         return (c == '\n' || (c == '|' && buffer_counts[i] > 100));
     }
 
-   void find_stretches_of_dna_and_unresolved_chars(unsigned &i, std::vector<std::string> &putative_sequences, unsigned min_read_length, bool last_block, bool& incomplete_context)
+   void find_stretches_of_dna_and_unresolved_chars(unsigned start_pos, std::vector<std::tuple<unsigned,int>> &putative_sequences, unsigned min_read_length, bool& incomplete_context, bool is_final_block)
     {
-        std::string current_sequence = "";
+        previous_rewind = 0;
+        unsigned i = start_pos;
         do
         {
-            // jump to next dna position
-            while (ascii2Dna[buffer[i]] == 0 && i < size()) {i++;}
+            // jump to next dna position that follows a '\n' or a '|' (avoid dna that follows quality values)
+            while (!(ascii2Dna[buffer[i]] > 0 && (buffer[i-1] == '\n' || buffer[i-1] == '|')) && (i < size())) {i++;}
 
-            unsigned nb_undetermined = 0;
-            unsigned current_nb_undetermined = 0;
+            unsigned nb_undetermined_parts = 0;
+            unsigned start_read = i;
+            unsigned position_before_last_undetermined = 0;
 
             // while it's dna or |, record
             while ((ascii2Dna[buffer[i]] > 0 || buffer[i] == '|') && (i < size()))
             {
-                //fprintf(stderr,"parsing dna char %c, so far %s\n",buffer[i]);
-                if (buffer[i] == '|') // delay adding |'s, because we right-trim them
-                    current_nb_undetermined++;
-                else  
+                //fprintf(stderr,"parsing dna char %c, so far %.*s\n",buffer[i],i-start_read,buffer+start_read);
+                if (buffer[i] != '|')
                 {
-                    current_sequence.append(current_nb_undetermined,'|');
-                    nb_undetermined += current_nb_undetermined;
-                    current_nb_undetermined = 0;
-                    current_sequence += buffer[i];
+                    if (i+1 < size() && buffer[i+1] == '|')
+                        position_before_last_undetermined = i;
+                    
+                    if (i > start_read && buffer[i-1] == '|')
+                        nb_undetermined_parts++;
                 }
                 i++;
             }
 
-            // heuristic: trim prefix if it corresponds to a suffix of the known barcode
-            // maybe we're really unlucky and that was the beginnin of the sequence
-            // so just to be sure, i'll enable it only if all reads have same length
-            if (nb_undetermined == 1 && (same_readlength > 0) && (current_sequence.size() > same_readlength))
+            unsigned read_length = i - start_read;
+
+            // if we end up at a non-|, non-\n character that's also not dna, clearly it has to be quality values, discard that portion
+            if (i < size() && buffer[i] != '|' && buffer[i] != '\n' && ascii2Dna[buffer[i]] == 0)
             {
-                for (unsigned j = 0; j < current_sequence.size(); j++)
-                    if (current_sequence[j] == '|' && same_readlength == current_sequence.size()-(j+1))
+                //fprintf(stderr,"likely ending up at a quality value: %.*s",i-start_read,buffer+start_read);
+                if (position_before_last_undetermined > 0)
+                {
+                    read_length = position_before_last_undetermined - start_read;
+                    nb_undetermined_parts--;
+                }
+                else
+                {
+                    read_length = 0;
+                    nb_undetermined_parts = 0;
+                }
+            }
+            
+
+            // conservative heuristic: 
+            // if all reads have same length
+            // trim prefix if it corresponds to a suffix of the known barcode
+            // trim suffix if it corresponds to quality that is encoded using DNA characters
+            if (nb_undetermined_parts == 1 && (same_readlength > 0) && (read_length > same_readlength))
+            {
+                for (unsigned j = 0; j < read_length; j++)
+                    if (buffer[start_read+j] == '|')
                     {
-                        //fprintf(stderr,"about to rectify string\t %s to\n%s\n",current_sequence.c_str(),current_sequence.substr(j+1).c_str());
-                        current_sequence = current_sequence.substr(j+1);
-                        nb_undetermined = 0;
+                        if (same_readlength == read_length-(j+1))
+                        {
+                            fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
+                            start_read = start_read+j+1;
+                            read_length = read_length-(j+1);
+                            nb_undetermined_parts--;
+                            break;
+                        }
+                        else
+                        {
+                            if (same_readlength == j)
+                            {
+                                fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
+                                read_length = j;
+                                nb_undetermined_parts--;
+                                break;
+                            }
+                        }
                     }
             }
 
-            // end of block? record offset instead of outputting sequence
-            if (unlikely(i == size() && current_sequence.size() > 0 && (!last_block)))
+            // end of block? record offset instead of outputting sequence (except very last file block)
+            if (unlikely(i == size() && (read_length > 0) && (!is_final_block)))
             {
                 // lets not insert that sequence and keep it for the next block
-                previous_rewind = current_sequence.size(); // record how many chars to go back, in next block
+                previous_rewind = read_length; // record how many chars to go back, in next block
                         // uncomment this for some debugging
                         //std::string buf_str = reinterpret_cast<const char *>(buffer);
                         //fprintf(stderr,"we think a good rewind location is -%d: %s[>]%s\n",
@@ -1443,14 +1480,14 @@ public:
                 break;
             }
 
-            if (current_sequence.size() >= min_read_length)
+            if (read_length >= min_read_length) // this test is a bit of a heuristic. maybe useful for things like header barcode
             {
-                if (nb_undetermined > 0)
+                if (nb_undetermined_parts > 0)
                 {
                     if (fully_reconstructed)
                     {
-                        fprintf(stderr,"undetermined seq: %s\n",current_sequence.c_str());
-                        unsolved_reads.push_back(current_sequence);
+                        fprintf(stderr,"undetermined seq: %.*s\n",read_length,buffer+start_read);
+                        //unsolved_reads.push_back(current_sequence);
                     }
                     else
                     {
@@ -1459,28 +1496,29 @@ public:
                     }
                 }
                 else
-                    putative_sequences.push_back(current_sequence);
-            }
+                {
+                    if (same_readlength > 0 && read_length != same_readlength && fully_reconstructed)
+                        fprintf(stderr,"unexpected length sequence: %.*s\n",read_length+10,buffer+start_read-10);
+                    putative_sequences.push_back(std::make_tuple(start_read,read_length));
+                }
 
-            current_sequence = "";
+           }
+
         }
         while (i < size());
     }
 
     // parse sequences in block, decide if it's fully reconstructed, if so, output all reads
-    void parse_block(unsigned decoded_block, synchronizer* stop, bool last_block)
+    void parse_block(unsigned decoded_block, synchronizer* stop, bool is_final_block)
     {
         unsigned min_read_length = 35; 
         long int start_pos = size()-block_size;
 
         // get_sequences_between_separators(); inlined
-        std::vector<std::string> putative_sequences;
+        std::vector<std::tuple<unsigned,int>> putative_sequences;
         std::string current_sequence = ""; current_sequence.reserve(256);
 
         bool incomplete_context = false;
-
-        unsigned i = start_pos - previous_rewind;
-        previous_rewind = 0;
 
         // print just beginning of block
         //std::string buf_str = reinterpret_cast<const char *>(buffer);
@@ -1489,12 +1527,12 @@ public:
 
 #ifdef DEBUG_BUFFER
         // print whole block!
-        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += std::to_string(buffer_counts[j]); } fprintf(stderr,"raw buffer of block %d: %s\n",decoded_block, buf_str.c_str());
+        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += "[" + std::to_string(buffer_counts[j]) + "," + std::to_string(backref_origins[j]) + "]"; } fprintf(stderr,"raw buffer of block %d: %s\n",decoded_block, buf_str.c_str());
 #endif
 
-        find_stretches_of_dna_and_unresolved_chars(i, putative_sequences, min_read_length, last_block, incomplete_context);
+        find_stretches_of_dna_and_unresolved_chars(start_pos - previous_rewind, putative_sequences, min_read_length, incomplete_context, is_final_block);
         
-        if (putative_sequences.size() < 10 && (!last_block)) // heuristic
+        if (putative_sequences.size() < 10 && ((!is_final_block))) // heuristic
         {
             if (fully_reconstructed)
                 fprintf(stderr,"went from fully reconstructed to incomplete due to low number of reads (%lu), buffer size %u\n", putative_sequences.size(), size());
@@ -1510,10 +1548,14 @@ public:
 
         if (!incomplete_context)
         { 
-            for (auto seq: putative_sequences)
+            for (auto seq_tuple: putative_sequences)
             {
+                unsigned offset = std::get<0>(seq_tuple);
+                int length = std::get<1>(seq_tuple);
+                
+                printf("%.*s\n",length,buffer+offset);
+
                 nb_reads_printed ++; // record this for later
-                printf("%s\n",seq.c_str());
             }
         }
 
@@ -1625,7 +1667,7 @@ public:
         has_dummy_32k = false;
     }
 
-    void notify_end_block(bool is_final_block, InputStream& in_stream){
+    void notify_end_block(InputStream& in_stream){
         PRINT_DEBUG("block size was %ld, pos %lubits, bits left %ld, overrun_count %lu, nb backrefs %u, tot/avg backrefs len %u/%.1f\n",
                     block_size,
                     in_stream.position_bits(),
@@ -2009,7 +2051,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         skip_counter = 20; // skip 20 blocks before checking for valid fastq 
     }
 
-    bool is_final_block = false, aligned = false;
+    bool keep_going = true, aligned = false;
     InputStream backup_in(in_stream);
 
     do {
@@ -2018,6 +2060,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         size_t block_inpos = in_stream.position();
         in_stream.ensure_bits<1>();
         bool went_fine = aligned || in_stream.bits(1) == 0; 
+        bool is_final_block = false;
         if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
             went_fine = out_window.size() > (1UL << 15) + (10UL << 10); // block needs to be larger than 10K
@@ -2041,13 +2084,13 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                 break;
             handle_skip(skip_counter, out_window);
 
-            if(stop != nullptr && !is_final_block) {
-                is_final_block |= stop->caught_up_block(block_inpos);
-                if(is_final_block)
-                    fprintf(stderr, "thread %lu stoped at %lu\n", pthread_self(), block_inpos);
+            if(stop != nullptr && keep_going) {
+                keep_going &= ! stop->caught_up_block(block_inpos);
+                if(keep_going == false)
+                    fprintf(stderr, "thread %lu stopped at %lu\n", pthread_self(), block_inpos);
             }
 
-            if (skip_counter == 0)
+            if (skip_counter == 0 && keep_going)
             {
                 bool previously_reconstructed = out_window.fully_reconstructed;
 
@@ -2062,13 +2105,13 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                     fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld\n",decoded_blocks);
                 }
                 
-                if (previously_reconstructed && (!out_window.fully_reconstructed) && (!is_final_block /* needed because final window will be flagged*/)) {
+                if (previously_reconstructed && (!out_window.fully_reconstructed) && (keep_going /* needed because final window will be flagged*/)) {
                     fprintf(stderr,"argh! we thought we had a complete context but actually decoded block %ld didn't parse well\n",decoded_blocks);
                     exit(1);
                 }
             }
 
-            out_window.notify_end_block(is_final_block, in_stream);
+            out_window.notify_end_block(in_stream);
         }
         else
         {
@@ -2095,7 +2138,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             out_window.clear();
             PRINT_DEBUG("restored after bad block\n");
         }
-    } while((!aligned) || (aligned && !is_final_block));
+        keep_going &= ! is_final_block;
+    } while((!aligned) || (aligned && keep_going));
 
     //out_window.flush(); // no need to call, is called at the end of each block. 
 
