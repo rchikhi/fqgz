@@ -1994,6 +1994,8 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
 
     if (is_same_readlength)
         same_readlength = first_readlen;
+    else
+        same_readlength = 0;
 
     if (barcodes.size() > 1)
         fprintf(stderr,"noticed that header ends with %lu barcodes: %s %s ..\n", barcodes.size(), barcodes.begin()->c_str(), (++barcodes.begin())->c_str());
