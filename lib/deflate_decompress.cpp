@@ -1253,6 +1253,8 @@ public:
         block_size = 0;
         previous_rewind = 0;
         nb_reads_printed = 0;
+        nb_unsolved_reads = 0;
+        nb_unexpected_length_reads = 0;
     }
 
     // record into a dedicated buffer that store counts of back references
@@ -1394,6 +1396,7 @@ public:
     {
         previous_rewind = 0;
         unsigned i = start_pos;
+        unsigned buffer_size = size();
         do
         {
             // jump to next dna position that follows a '\n' or a '|' (avoid dna that follows quality values)
@@ -1404,17 +1407,17 @@ public:
             unsigned position_before_last_undetermined = 0;
 
             // while it's dna or |, record
-            while ((ascii2Dna[buffer[i]] > 0 || buffer[i] == '|') && (i < size()))
+            while ((ascii2Dna[buffer[i]] > 0 || buffer[i] == '|') && (i < buffer_size))
             {
                 //fprintf(stderr,"parsing dna char %c, so far %.*s\n",buffer[i],i-start_read,buffer+start_read);
                 if (buffer[i] != '|')
                 {
-                    if (i+1 < size() && buffer[i+1] == '|')
+                    if (i+1 < buffer_size && buffer[i+1] == '|')
                         position_before_last_undetermined = i;
-                    
                     if (i > start_read && buffer[i-1] == '|')
                         nb_undetermined_parts++;
                 }
+
                 i++;
             }
 
@@ -1425,17 +1428,13 @@ public:
             {
                 //fprintf(stderr,"likely ending up at a quality value: %.*s",i-start_read,buffer+start_read);
                 if (position_before_last_undetermined > 0)
-                {
                     read_length = position_before_last_undetermined - start_read;
-                    nb_undetermined_parts--;
-                }
                 else
                 {
                     read_length = 0;
                     nb_undetermined_parts = 0;
                 }
             }
-            
 
             // conservative heuristic: 
             // if all reads have same length
@@ -1468,7 +1467,7 @@ public:
             }
 
             // end of block? record offset instead of outputting sequence (except very last file block)
-            if (unlikely(i == size() && (read_length > 0) && (!is_final_block)))
+            if (unlikely(i == buffer_size && (read_length > 0) && (!is_final_block)))
             {
                 // lets not insert that sequence and keep it for the next block
                 previous_rewind = read_length; // record how many chars to go back, in next block
@@ -1486,8 +1485,9 @@ public:
                 {
                     if (fully_reconstructed)
                     {
-                        fprintf(stderr,"undetermined seq: %.*s\n",read_length,buffer+start_read);
+                        //fprintf(stderr,"undetermined seq: %.*s\n",read_length,buffer+start_read);
                         //unsolved_reads.push_back(current_sequence);
+                        nb_unsolved_reads++;
                     }
                     else
                     {
@@ -1498,14 +1498,17 @@ public:
                 else
                 {
                     if (same_readlength > 0 && read_length != same_readlength && fully_reconstructed)
-                        fprintf(stderr,"unexpected length sequence: %.*s\n",read_length+10,buffer+start_read-10);
+                    {
+                        //fprintf(stderr,"unexpected length sequence: %.*s\n",read_length,buffer+start_read);
+                        nb_unexpected_length_reads++;
+                    }
                     putative_sequences.push_back(std::make_tuple(start_read,read_length));
                 }
 
            }
 
         }
-        while (i < size());
+        while (i < buffer_size);
     }
 
     // parse sequences in block, decide if it's fully reconstructed, if so, output all reads
@@ -1535,8 +1538,11 @@ public:
         if (putative_sequences.size() < 10 && ((!is_final_block))) // heuristic
         {
             if (fully_reconstructed)
-                fprintf(stderr,"went from fully reconstructed to incomplete due to low number of reads (%lu), buffer size %u\n", putative_sequences.size(), size());
-            incomplete_context = true;
+            {
+                //fprintf(stderr,"went from fully reconstructed to incomplete due to low number of reads (%lu), buffer size %u\n", putative_sequences.size(), size());
+            }
+            else
+                incomplete_context = true;
         }
 
         PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
@@ -1700,8 +1706,10 @@ public:
     void final_stats()
     {
         fprintf(stderr,"done, printed %d reads\n",nb_reads_printed);
-        if (unsolved_reads.size() > 0)
-            fprintf(stderr,"and also didn't print %lu reads containing undetermined characters\n",unsolved_reads.size());
+        if (nb_unsolved_reads > 0)
+            fprintf(stderr,"and also didn't print %u reads containing undetermined characters\n",nb_unsolved_reads);
+        if (same_readlength && (nb_unexpected_length_reads > 0))
+            fprintf(stderr,"and finally also didn't parse correctly %u reads that had read length != to estimated constant %d\n",nb_unexpected_length_reads,same_readlength);
     }
 
     byte* current_blk;
@@ -1729,6 +1737,8 @@ public:
     unsigned previous_rewind; // amount of bytes to rewind due to parsing of previous block
 
     std::vector<std::string> unsolved_reads; // reads where context wasn't elucidated, to be solved at the end
+    unsigned nb_unsolved_reads;
+    unsigned nb_unexpected_length_reads;
     unsigned nb_reads_printed;
 };
 
@@ -1989,13 +1999,19 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
         if (header_ends_with_dna)
             barcodes.insert(bc);
     }
+
     fprintf(stderr,"estimated header length: %d, quality length: %d, ",header_length,quality_header_length);
-    fprintf(stderr,"%s\n",is_same_readlength?"same read length":"different read lengths");
 
     if (is_same_readlength)
         same_readlength = first_readlen;
     else
         same_readlength = 0;
+
+    if (is_same_readlength)
+        fprintf(stderr,"same read length: %u\n",same_readlength);
+    else
+        fprintf(stderr,"different read length\n");
+
 
     if (barcodes.size() > 1)
         fprintf(stderr,"noticed that header ends with %lu barcodes: %s %s ..\n", barcodes.size(), barcodes.begin()->c_str(), (++barcodes.begin())->c_str());
