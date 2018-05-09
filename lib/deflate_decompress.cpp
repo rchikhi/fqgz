@@ -1055,7 +1055,8 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
     return true;
 }
 
-#define output_buffer_bits 22 // FIXME: constructor parameter
+#define output_buffer_bits 21 // FIXME: constructor parameter
+// FIXME assumes that a gzip block can't be larger than 2 MB
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
@@ -1447,7 +1448,7 @@ public:
                     {
                         if (same_readlength == read_length-(j+1))
                         {
-                            fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
+                            //fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
                             start_read = start_read+j+1;
                             read_length = read_length-(j+1);
                             nb_undetermined_parts--;
@@ -1457,7 +1458,7 @@ public:
                         {
                             if (same_readlength == j)
                             {
-                                fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
+                                //fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
                                 read_length = j;
                                 nb_undetermined_parts--;
                                 break;
@@ -1503,6 +1504,8 @@ public:
                         nb_unexpected_length_reads++;
                     }
                     putative_sequences.push_back(std::make_tuple(start_read,read_length));
+                    
+                    i += 5+read_length; // FIXME heuristic, but at this point, if everything that we're outputting is a read, why not skip by quality and header length? trying this.
                 }
 
            }
