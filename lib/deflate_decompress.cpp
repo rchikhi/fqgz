@@ -1148,8 +1148,8 @@ public:
     /// Move the 32K context to the start of the buffer
     void flush(size_t window_size=1UL<<15) {
         assert(size() > window_size);
-        assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
-        memcpy(buffer, next - window_size, window_size);
+        //assert(buffer + window_size <= next - window_size); // src and dst aren't overlapping
+        memmove(buffer, next - window_size, window_size);
 
         // update next pointer
         next = buffer + window_size;
@@ -1293,24 +1293,14 @@ public:
     }
 
     bool check_ascii() {
-        unsigned start = has_dummy_32k ? (1<<15) : 0;
-        unsigned dec_size = size() - start;
-        if(dec_size < 1024) { // Required decoded size to properly assess block synchronization
-            return false;
-        }
-
-        unsigned ascii_found = 0;
         for(unsigned i = has_dummy_32k ? (1<<15) : 0 ; i < size() ; i++) {
             unsigned char c = buffer[i];
-            if(c > '~') {
+            if(c > '~' || c < '\t') {
                 return false;
-            }
-            if(c != '?') {
-                ascii_found++;
             }
         }
 
-        return ascii_found >= dec_size/4;
+        return true;
     }
 
     // make sure the buffer contains at least something that looks like fastq
@@ -1562,13 +1552,12 @@ public:
 
     /* called when the window is full.
      * note: not necessarily at the end of a block */
-    void flush() {
+    void flush(size_t keep_size = 1UL<<15) {
         output_porcelain();
-        constexpr size_t window_size = 1UL<<15;
 
         // update counts
-        memcpy(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
-        memcpy(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
+        memcpy(buffer_counts, buffer_counts + size() - keep_size, keep_size*sizeof(uint32_t));
+        memcpy(backref_origins, backref_origins + size() - keep_size, keep_size*sizeof(uint16_t));
 
         if(output_to_target) {
             size_t start = has_dummy_32k ? 1UL<<15 : 0;
@@ -1666,10 +1655,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         break;
 
     case DEFLATE_BLOCKTYPE_UNCOMPRESSED:
-        ret = do_uncompressed(in_stream, out);
-        if (!ret)
-            return false;
-        break;
+        return do_uncompressed(in_stream, out);
 
     case DEFLATE_BLOCKTYPE_STATIC_HUFFMAN:
         ret = prepare_static(d);
@@ -1861,6 +1847,9 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
     InputStream backup_in(in_stream);
 
     do {
+        in_stream.ensure_bits<1>();
+        if(in_stream.bits(0) == 1)
+            continue;
 
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
@@ -1868,7 +1857,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
         went_fine = do_block(d, in_stream, out_window, is_final_block);
         if(unlikely(!aligned && went_fine)) {
-            went_fine &= out_window.check_ascii();
+            went_fine &= out_window.size() - (1U << 15) >= (10U << 10);
+            if(went_fine) went_fine &= out_window.check_ascii();
             if(went_fine) {
                 PRINT_DEBUG("First sync block at %d %d\n", in_stream.position(), in_stream.position_bits());
             }
@@ -1921,7 +1911,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         }
     } while((!aligned) || (aligned && !is_final_block));
 
-    out_window.flush();
+    out_window.flush(0);
 
     *actual_out_nbytes_ret = out_window.get_evicted_length(); // tell how many bytes we actually output
 
