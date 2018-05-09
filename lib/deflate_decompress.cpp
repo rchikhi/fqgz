@@ -75,6 +75,10 @@
 #define DEBUG_FIRST_BLOCK(x) {}
 #endif
 
+// may want to disable that for performance
+//#define RECORD_BUFFER_COUNTS_AND_BACKREFS
+
+
 /*
  * Each TABLEBITS number is the base-2 logarithm of the number of entries in the
  * main portion of the corresponding decode table.  Each number should be large
@@ -1259,14 +1263,15 @@ public:
 
     // record into a dedicated buffer that store counts of back references
     void record_match(unsigned length, unsigned offset) {
+#ifdef  RECORD_BUFFER_COUNTS_AND_BACKREFS
         size_t start = size() - offset;
         for (unsigned int i = 0; i < length; i++) {
 	        buffer_counts[size()+i] = ++buffer_counts[start+i];
             backref_origins[size()+i] = backref_origins[start+i];
         }
-
         nb_back_refs_in_block++;
         len_back_refs_in_block += length;
+#endif
     }
 
     bool check_match(unsigned length, unsigned offset) {
@@ -1293,8 +1298,10 @@ public:
 
     void push(byte c) {
         DEBUG_FIRST_BLOCK(if (c >' ' && c<'}') fprintf(stderr,"literal %c\n",c);)
+#ifdef  RECORD_BUFFER_COUNTS_AND_BACKREFS
         buffer_counts[size()] = 0;
         backref_origins[size()] = 0;
+#endif
         Base::push(c);
         block_size++;
     }
@@ -1307,10 +1314,12 @@ public:
 
     void copy(InputStream & in, unsigned length) {
         size_t start = size();
+#ifdef  RECORD_BUFFER_COUNTS_AND_BACKREFS
         for(size_t i=start ; i < start + length ; i++) {
             buffer_counts[i]=0;
             backref_origins[i]=0;
         }
+#endif
         Base::copy(in, length);
     }
 
@@ -1383,15 +1392,6 @@ public:
         return true;
     }
 
-    // this function tries to guess the \n's
-    // it can sometimes be called with i larger than buffer size, just be graceful
-    bool is_likely_separator(unsigned i)
-    {
-        if (i >= size()) return true; 
-        unsigned char c = buffer[i];
-        return (c == '\n' || (c == '|' && buffer_counts[i] > 100));
-    }
-
    void find_stretches_of_dna_and_unresolved_chars(unsigned start_pos, std::vector<std::tuple<unsigned,int>> &putative_sequences, unsigned min_read_length, bool& incomplete_context, bool is_final_block)
     {
         previous_rewind = 0;
@@ -1400,7 +1400,7 @@ public:
         do
         {
             // jump to next dna position that follows a '\n' or a '|' (avoid dna that follows quality values)
-            while (!(ascii2Dna[buffer[i]] > 0 && (buffer[i-1] == '\n' || buffer[i-1] == '|')) && (i < size())) {i++;}
+            while (!(ascii2Dna[buffer[i]] > 0 && (buffer[i-1] == '\n' || buffer[i-1] == '|')) && (i < buffer_size)) {i++;}
 
             unsigned nb_undetermined_parts = 0;
             unsigned start_read = i;
@@ -1410,11 +1410,11 @@ public:
             while ((ascii2Dna[buffer[i]] > 0 || buffer[i] == '|') && (i < buffer_size))
             {
                 //fprintf(stderr,"parsing dna char %c, so far %.*s\n",buffer[i],i-start_read,buffer+start_read);
-                if (buffer[i] != '|')
+                if (likely(buffer[i] != '|'))
                 {
-                    if (i+1 < buffer_size && buffer[i+1] == '|')
+                    if (unlikely(i+1 < buffer_size && buffer[i+1] == '|'))
                         position_before_last_undetermined = i;
-                    if (i > start_read && buffer[i-1] == '|')
+                    if (unlikely(i > start_read && buffer[i-1] == '|'))
                         nb_undetermined_parts++;
                 }
 
@@ -1424,11 +1424,11 @@ public:
             unsigned read_length = i - start_read;
 
             // if we end up at a non-|, non-\n character that's also not dna, clearly it has to be quality values, discard that portion
-            if (i < size() && buffer[i] != '|' && buffer[i] != '\n' && ascii2Dna[buffer[i]] == 0)
+            if (unlikely(i < size() && buffer[i] != '|' && buffer[i] != '\n' && ascii2Dna[buffer[i]] == 0))
             {
                 //fprintf(stderr,"likely ending up at a quality value: %.*s",i-start_read,buffer+start_read);
                 if (position_before_last_undetermined > 0)
-                    read_length = position_before_last_undetermined - start_read;
+                    read_length = position_before_last_undetermined - start_read + 1;
                 else
                 {
                     read_length = 0;
@@ -1440,14 +1440,14 @@ public:
             // if all reads have same length
             // trim prefix if it corresponds to a suffix of the known barcode
             // trim suffix if it corresponds to quality that is encoded using DNA characters
-            if (nb_undetermined_parts == 1 && (same_readlength > 0) && (read_length > same_readlength))
+            if (unlikely(nb_undetermined_parts == 1 && (same_readlength > 0) && (read_length > same_readlength)))
             {
                 for (unsigned j = 0; j < read_length; j++)
                     if (buffer[start_read+j] == '|')
                     {
                         if (same_readlength == read_length-(j+1))
                         {
-                            //fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
+                            fprintf(stderr,"likely removing header from\t %.*s to\n%.*s\n",read_length,buffer+start_read,read_length-(j+1),buffer+start_read+j+1);
                             start_read = start_read+j+1;
                             read_length = read_length-(j+1);
                             nb_undetermined_parts--;
@@ -1457,7 +1457,7 @@ public:
                         {
                             if (same_readlength == j)
                             {
-                                //fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
+                                fprintf(stderr,"likely removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,buffer+start_read,j-1,buffer+start_read);
                                 read_length = j;
                                 nb_undetermined_parts--;
                                 break;
@@ -1479,9 +1479,9 @@ public:
                 break;
             }
 
-            if (read_length >= min_read_length) // this test is a bit of a heuristic. maybe useful for things like header barcode
+            if (likely(read_length >= min_read_length)) // this test is a bit of a heuristic. maybe useful for things like header barcode
             {
-                if (nb_undetermined_parts > 0)
+                if (unlikely(nb_undetermined_parts > 0))
                 {
                     if (fully_reconstructed)
                     {
@@ -1530,7 +1530,9 @@ public:
 
 #ifdef DEBUG_BUFFER
         // print whole block!
+        //if (fully_reconstructed){
         std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += "[" + std::to_string(buffer_counts[j]) + "," + std::to_string(backref_origins[j]) + "]"; } fprintf(stderr,"raw buffer of block %d: %s\n",decoded_block, buf_str.c_str());
+        //}
 #endif
 
         find_stretches_of_dna_and_unresolved_chars(start_pos - previous_rewind, putative_sequences, min_read_length, incomplete_context, is_final_block);
@@ -1580,6 +1582,7 @@ public:
 
     void pretty_print()
     {
+#ifdef RECORD_BUFFER_COUNTS_AND_BACKREFS
        const char*  KNRM = "\x1B[0m";
       const char*  KRED = "\x1B[31m";
       const char*  KGRN = "\x1B[32m";
@@ -1644,6 +1647,7 @@ public:
                 }
             }
         }
+#endif
     }
 
     /* called when the window is full.
@@ -1654,9 +1658,12 @@ public:
         //fprintf(stderr,"flushing block!!\n");
 
         constexpr size_t window_size = 1UL<<15;
+
+#ifdef RECORD_BUFFER_COUNTS_AND_BACKREFS
         // update counts
         memmove(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
         memmove(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
+#endif 
 
         unsigned moved_by;
         if(false && output_to_target) {
