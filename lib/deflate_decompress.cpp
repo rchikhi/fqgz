@@ -2021,7 +2021,7 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
         same_readlength = 0;
 
     if (is_same_readlength)
-        fprintf(stderr,"same read length: %u\n",same_readlength);
+        fprintf(stderr,"apparently same read length: %u\n",same_readlength); // unreliable: some files have same readlength for a while but then subtly change. e.g ERA971095-A007-3-KR-6-11-GCAGTGTG-run20150326N_S7_merged_R1_001.trim.fastq.gz
     else
         fprintf(stderr,"different read length\n");
 
