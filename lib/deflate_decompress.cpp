@@ -1313,8 +1313,8 @@ public:
     }
 
     void copy(InputStream & in, unsigned length) {
-        size_t start = size();
 #ifdef  RECORD_BUFFER_COUNTS_AND_BACKREFS
+        size_t start = size();
         for(size_t i=start ; i < start + length ; i++) {
             buffer_counts[i]=0;
             backref_origins[i]=0;
@@ -1657,9 +1657,8 @@ public:
     void flush() {
         //fprintf(stderr,"flushing block!!\n");
 
-        constexpr size_t window_size = 1UL<<15;
-
 #ifdef RECORD_BUFFER_COUNTS_AND_BACKREFS
+        constexpr size_t window_size = 1UL<<15;
         // update counts
         memmove(buffer_counts, buffer_counts + size() - window_size, window_size*sizeof(uint32_t));
         memmove(backref_origins, backref_origins + size() - window_size, window_size*sizeof(uint16_t));
