@@ -1,6 +1,7 @@
 #for f in `ls /nvme/fastq/ERA*.gz`
-for f in `ls /home/gzip/fastq/moar_files/ERA*.gz`
+for f in `ls /home/gzip/fastq/hdd_files/ERA*.gz`
 do
+    f=$(readlink -f $f)
     FILESIZE=$(stat -c%s "$f")
     if [ "$FILESIZE" -lt "200000000" ]
     then
