@@ -1256,6 +1256,7 @@ public:
         current_blk = next;
 
         block_size = 0;
+        total_block_size = 0;
         previous_rewind = 0;
         nb_reads_printed = 0;
         nb_unsolved_reads = 0;
@@ -1556,9 +1557,9 @@ public:
 
         PRINT_DEBUG("check_fully_reconstructed status: total buffer size %d, ", (int)(next-buffer));
         if (!incomplete_context) {
-            PRINT_DEBUG("fully reconstructed, %d reads\n", nb_reads); 
+            PRINT_DEBUG("fully reconstructed, %d reads\n", putative_sequences.size()); 
         } else {
-            PRINT_DEBUG("incomplete, %d reads\n ", nb_reads);
+            PRINT_DEBUG("incomplete, %d reads\n ", putative_sequences.size());
         }
 
         if (!incomplete_context)
@@ -1699,6 +1700,7 @@ public:
         current_blk = next;
         nb_back_refs_in_block = 0;
         len_back_refs_in_block = 0;
+        total_block_size += block_size;
         block_size = 0;
         flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
@@ -1733,6 +1735,7 @@ public:
 
     // some block/back-references statistics
     unsigned block_size;
+    unsigned total_block_size;
     unsigned nb_back_refs_in_block;
     unsigned len_back_refs_in_block;
 
@@ -2133,7 +2136,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                                 pthread_self(), block_inpos);
                         prev_sync->signal_first_decoded_sequence(block_inpos, 0 /* we don't need to record that anymore, now whole block is decomp or not */);
                     }
-                    fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld\n",decoded_blocks);
+
+                    fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld, mean block size %.1f\n",decoded_blocks,1.0*(out_window.total_block_size+out_window.block_size)/decoded_blocks);
                 }
                 
                 if (previously_reconstructed && (!out_window.fully_reconstructed) && (keep_going /* needed because final window will be flagged*/)) {
