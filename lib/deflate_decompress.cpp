@@ -1413,9 +1413,9 @@ public:
                 //fprintf(stderr,"parsing dna char %c, so far %.*s\n",buffer[i],i-start_read,buffer+start_read);
                 if (likely(buffer[i] != '|'))
                 {
-                    if (unlikely(i+1 < buffer_size && buffer[i+1] == '|'))
+                    if (i+1 < buffer_size && buffer[i+1] == '|')
                         position_before_last_undetermined = i;
-                    if (unlikely(i > start_read && buffer[i-1] == '|'))
+                    if (i > start_read && buffer[i-1] == '|')
                         nb_undetermined_parts++;
                 }
 
@@ -1429,7 +1429,11 @@ public:
             {
                 //fprintf(stderr,"likely ending up at a quality value: %.*s",i-start_read,buffer+start_read);
                 if (position_before_last_undetermined > 0)
+                {
                     read_length = position_before_last_undetermined - start_read + 1;
+                    if (ascii2Dna[buffer[i-1]] > 0 && nb_undetermined_parts > 0) // read had one or more |'s stretches and last part contained some dna
+                        nb_undetermined_parts--;
+                }   
                 else
                 {
                     read_length = 0;

@@ -54,7 +54,7 @@ endif
 
 # print to stderr the whole buffer before it is parsed
 ifeq ($(buf),1)
-	 LIB_CFLAGS+= -DDEBUG_BUFFER=1
+	 LIB_CFLAGS+= -DDEBUG_BUFFER=1 -DRECORD_BUFFER_COUNTS_AND_BACKREFS
 endif
 
 
