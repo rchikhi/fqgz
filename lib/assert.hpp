@@ -19,7 +19,7 @@ __assert_fail(const char* assertion, const char* file, unsigned int line, const 
     std::abort();
 }
 
-/// Allows to biais branch weight based on template parameter
+/// Allows to bias branch weight based on template parameter
 struct ShouldSucceed
 {
     static constexpr bool succeed_if(bool p) { return likely(p); }
@@ -29,20 +29,6 @@ struct ShouldFail
 {
     static constexpr bool succeed_if(bool p) { return unlikely(p); }
     static constexpr bool fail_if(bool p) { return likely(p); }
-};
-struct MustSucceed
-{
-    // FIXME: runtime errors in release mode
-    static constexpr bool succeed_if(bool p)
-    {
-        assert(p);
-        return true;
-    }
-    static constexpr bool fail_if(bool p)
-    {
-        assert(!p);
-        return false;
-    }
 };
 
 #endif // ASSERT_HPP

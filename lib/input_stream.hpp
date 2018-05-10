@@ -45,7 +45,6 @@ class InputStream
     bitbuf_t bitbuf = bitbuf_t(0);     /// Bit buffer
     bitbuf_size_t bitsleft = 0;        /// Number of valid bits in the bit buffer
     bitbuf_size_t overrun_count = 0;
-    bool reached_final_block = false;
 
     /**
      * Number of bits the bitbuffer variable can hold.
@@ -129,7 +128,6 @@ class InputStream
         bitbuf = from.bitbuf;
         bitsleft = from.bitsleft;
         overrun_count = from.overrun_count;
-        reached_final_block = from.reached_final_block;
         return *this;
     }
 

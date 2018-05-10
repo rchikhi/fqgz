@@ -590,8 +590,8 @@ prepare_static(struct libdeflate_decompressor* restrict d)
     for (unsigned i = DEFLATE_NUM_LITLEN_SYMS; i < DEFLATE_NUM_LITLEN_SYMS + DEFLATE_NUM_OFFSET_SYMS; i++)
         d->u.l.lens[i] = 5;
 
-    assert(build_offset_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS, MustSucceed{}));
-    assert(build_litlen_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS, MustSucceed{}));
+    assert(build_offset_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS, ShouldSucceed{}));
+    assert(build_litlen_decode_table(d, DEFLATE_NUM_LITLEN_SYMS, DEFLATE_NUM_OFFSET_SYMS, ShouldSucceed{}));
 }
 
 LIBDEFLATEAPI struct libdeflate_decompressor*

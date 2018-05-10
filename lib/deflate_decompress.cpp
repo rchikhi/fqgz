@@ -208,47 +208,65 @@ prepare_dynamic(struct libdeflate_decompressor* restrict d, InputStream& in_stre
     return true;
 }
 
+enum class block_result : unsigned
+{
+    SUCCESS = 0,
+    LAST_BLOCK = 1,
+    WINDOW_OVERFLOW = 2,
+    INVALID_BLOCK_TYPE,
+    INVALID_DYNAMIC_HT,
+    INVALID_UNCOMPRESSED_BLOCK,
+    INVALID_LITERAL,
+    INVALID_MATCH,
+    TOO_MUCH_INPUT,
+    NOT_ENOUGH_INPUT,
+    INVALID_PARSE,
+};
+
+static constexpr const char* block_result_strings[] = {
+    "SUCCESS",         "LAST_BLOCK",    "WINDOW_OVERFLOW", "INVALID_BLOCK_TYPE", "INVALID_DYNAMIC_HT", "INVALID_UNCOMPRESSED_BLOCK",
+    "INVALID_LITERAL", "INVALID_MATCH", "TOO_MUCH_INPUT",  "NOT_ENOUGH_INPUT",   "INVALID_PARSE"
+};
+
+const char*
+to_cstr(block_result result)
+{
+    return block_result_strings[static_cast<unsigned>(result)];
+}
+
 /* return true if block decompression went smoothly, false if not (probably due to corrupt data) */
 template<typename OutWindow, typename might = ShouldSucceed>
-inline bool
+inline block_result
 do_block(struct libdeflate_decompressor* restrict main_d, InputStream& in_stream, OutWindow& out, const might& might_tag = {})
 {
-    libdeflate_decompressor* restrict cur_d;
     /* Starting to read the next block.  */
-    in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
-
-    if (unlikely(in_stream.available() ==
-                 0)) // Rayan: i've added that check but i doubt it's useful (actually.. maybe it is, if we have been unable to decompress any block..)
-    {
-        fprintf(stderr, "reached end of file\n");
-        in_stream.reached_final_block = true;
-        return false;
-    }
+    if (unlikely(!in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>()))
+        return block_result::NOT_ENOUGH_INPUT;
 
     /* BFINAL: 1 bit  */
-    in_stream.reached_final_block = in_stream.pop_bits(1);
+    block_result success = in_stream.pop_bits(1) ? block_result::LAST_BLOCK : block_result::SUCCESS;
 
-    bool ret;
     /* BTYPE: 2 bits  */
+    libdeflate_decompressor* restrict cur_d;
     switch (in_stream.pop_bits(2)) {
         case DEFLATE_BLOCKTYPE_DYNAMIC_HUFFMAN:
-            ret = prepare_dynamic(main_d, in_stream, might_tag);
+            if (might::fail_if(!prepare_dynamic(main_d, in_stream, might_tag)))
+                return block_result::INVALID_DYNAMIC_HT;
             cur_d = main_d;
-            if (might::fail_if(!ret))
-                return false;
             break;
 
         case DEFLATE_BLOCKTYPE_UNCOMPRESSED:
-            return do_uncompressed(in_stream, out, might_tag) && out.notify_end_block(in_stream);
-            break;
+            if (might::fail_if(!do_uncompressed(in_stream, out, might_tag)))
+                return block_result::INVALID_UNCOMPRESSED_BLOCK;
+
+            return might::succeed_if(out.notify_end_block(in_stream)) ? success : block_result::INVALID_PARSE;
 
         case DEFLATE_BLOCKTYPE_STATIC_HUFFMAN:
-            // prepare_static(d);
             cur_d = main_d->static_decompressor;
             break;
 
         default:
-            return might::fail_if(false);
+            return block_result::INVALID_BLOCK_TYPE;
     }
 
     /* Decompressing a Huffman block (either dynamic or static)  */
@@ -271,11 +289,11 @@ do_block(struct libdeflate_decompressor* restrict main_d, InputStream& in_stream
             /* Literal  */
             if (unlikely(out.available() == 0)) {
                 if (might::fail_if(out.flush() == 0))
-                    return false;
+                    return block_result::WINDOW_OVERFLOW;
             }
 
             if (might::fail_if(!out.push(byte(entry >> HUFFDEC_RESULT_SHIFT)))) {
-                return false;
+                return block_result::INVALID_LITERAL;
             }
 
             // fprintf(stderr,"literal: %c\n",byte(entry >> HUFFDEC_RESULT_SHIFT)); // this is indeed the plaintext decoded character, good to know
@@ -297,11 +315,11 @@ do_block(struct libdeflate_decompressor* restrict main_d, InputStream& in_stream
          * SIZE_MAX.  */
         // static_assert(HUFFDEC_END_OF_BLOCK_LENGTH == 0);
         if (unlikely(length - 1 >= out.available())) {
-            if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH)) {
-                return out.notify_end_block(in_stream); // Block done
-            } else {                                    // Needs flushing
+            if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH)) { // Block done
+                return might::succeed_if(out.notify_end_block(in_stream)) ? success : block_result::INVALID_PARSE;
+            } else { // Needs flushing
                 if (unlikely(out.flush() == 0)) {
-                    return false;
+                    return block_result::WINDOW_OVERFLOW;
                 }
                 assert(length <= out.available());
             }
@@ -327,7 +345,7 @@ do_block(struct libdeflate_decompressor* restrict main_d, InputStream& in_stream
         /* Copy the match: 'length' bytes at 'out_next - offset' to
          * 'out_next'.  */
         if (might::fail_if(!out.copy_match(length, offset))) {
-            return false;
+            return block_result::INVALID_MATCH;
         }
     }
 }
@@ -338,6 +356,7 @@ inline std::pair<Window, size_t>
 do_skip(struct libdeflate_decompressor* restrict d,
         InputStream& in_stream,
         const size_t skip = 0,
+        const unsigned nb_valid_blocks_confirm = 8,
         const size_t max_bits_skip = size_t(1) << (3 + 20), // 1MiB
         const size_t min_block_size = 1 << 13               // 8KiB
 )
@@ -360,24 +379,43 @@ do_skip(struct libdeflate_decompressor* restrict d,
         //            fprintf(stderr, "Block reached!!\n");
         //        })
 
-        if (unlikely(do_block(d, cur_in, out_window, ShouldFail{}) && out_window.size() - out_window.context_size > min_block_size)) {
-            // Now we try to fill the window from this position:
+        block_result res = do_block(d, cur_in, out_window, ShouldFail{});
+
+        if (unlikely(res == block_result::SUCCESS) && out_window.size() - out_window.context_size >= min_block_size) {
+
+            size_t first_block_pos = in_stream.position_bits();
+            fprintf(stderr, "Candidate block start at %lubits\n", first_block_pos);
+
+            // Now we try to fill the window from this position untill overflow:
             char_t* backup_next = out_window.next;
             InputStream backup_in = cur_in;
-            while (do_block(d, cur_in, out_window, ShouldSucceed{})) {
-                backup_next = out_window.next;
-                backup_in = cur_in;
+            for (unsigned trial = 0; trial < nb_valid_blocks_confirm || res != block_result::SUCCESS;
+                 trial++, backup_next = out_window.next, backup_in = cur_in) {
+                res = do_block(d, cur_in, out_window, ShouldSucceed{});
             }
-            out_window.next = backup_next; // End of last fully decoded block
 
-            // FIXME: proper distinction of windows overflow vs real faillure
-            if (likely(out_window.size() > 3 * out_window.buffer_size / 4 || (cur_in.reached_final_block && (cur_in.available() == 0)))) {
-                fprintf(stderr, "found at: %lu\n", in_stream.position_bits());
-                size_t first_block_pos = in_stream.position_bits();
-                in_stream = backup_in;
+            if ((res == block_result::LAST_BLOCK) != (cur_in.available() == 0))
+                res = res == block_result::LAST_BLOCK ? block_result::TOO_MUCH_INPUT : block_result::NOT_ENOUGH_INPUT;
+
+            if (res <= block_result::WINDOW_OVERFLOW) {
+                if (res == block_result::WINDOW_OVERFLOW) {
+                    // Restore window and input stream before the last decoded block
+                    out_window.next = backup_next;
+                    in_stream = backup_in;
+                } else { // otherwise, yield the input_stream after the last decoded block
+                    in_stream = cur_in;
+                }
+
                 return { std::move(out_window), first_block_pos };
+            } else {
+                fprintf(stderr,
+                        "False positive sync: (code %s)\n"
+                        "\tin_stream position: %lu\n"
+                        "\twindows size: %lu\n",
+                        to_cstr(res),
+                        cur_in.position_bits(),
+                        out_window.size() - out_window.context_size);
             }
-            fprintf(stderr, "False positive sync: windows size: %lu\n", out_window.size() - out_window.context_size);
         }
 
         out_window.clear();
@@ -403,21 +441,36 @@ print_block_boundaries(struct libdeflate_decompressor* restrict d,
 {
     SymbolicDummyContext<> out_window;
     InputStream cur_in = in_stream;
-    for (size_t i = 0; i < nb_blocks && !cur_in.reached_final_block; i++) {
+    for (size_t i = 0; i < nb_blocks; i++) {
         on_boundary(InputStream(cur_in));
-        assert(do_block(d, cur_in, out_window, MustSucceed{}));
+        block_result res = do_block(d, cur_in, out_window, ShouldSucceed{});
         fprintf(stderr, "Block decompressed size: %ld\n", out_window.size() - out_window.context_size);
+        if (unlikely(res == block_result::LAST_BLOCK))
+            break;
+        if (unlikely(res != block_result::SUCCESS)) {
+            fprintf(stderr, "Error: %s\n", to_cstr(res));
+            std::abort();
+        }
         out_window.clear();
     }
     on_boundary(InputStream(cur_in));
 }
 
 template<typename Window>
-inline void
-decompress_loop(struct libdeflate_decompressor* restrict d, InputStream in_stream, Window& window, synchronizer* stop)
+inline block_result
+decompress_loop(struct libdeflate_decompressor* restrict d, InputStream& in_stream, Window& window, synchronizer* stop)
 {
-    while (!(in_stream.reached_final_block || (stop && stop->caught_up_block(in_stream.position_bits())))) {
-        assert(do_block(d, in_stream, window, MustSucceed{}));
+    for (;;) {
+        block_result res = do_block(d, in_stream, window, ShouldSucceed{});
+        if (unlikely(res != block_result::SUCCESS)) {
+            if (res == block_result::WINDOW_OVERFLOW || res == block_result::LAST_BLOCK)
+                return res;
+
+            fprintf(stderr, "Block error: %s\n", to_cstr(res));
+            std::abort();
+        }
+        if (unlikely(stop && stop->caught_up_block(in_stream.position_bits())))
+            return res;
     }
 }
 
@@ -441,8 +494,10 @@ decompress_chunks(struct libdeflate_decompressor* restrict d,
         fprintf(stderr, "Thread %lu synced at %lubits\n", skip, first_block_bit_pos);
     }
 
+    // No need to do more block since do_skip filled the window:
     decompress_loop(d, in_stream, window, stop);
-    fprintf(stderr, "Thread 0 ended at %lubits\n", in_stream.position_bits());
+
+    fprintf(stderr, "Thread %lu ended at %lubits\n", skip, in_stream.position_bits());
 
     if (prev_sync)
         prev_sync->with_context([&](unsigned char* context) {
