@@ -1,8 +1,12 @@
+import os
 import sys
 from collections import defaultdict
 filename, compression_mode, nb_reads, nb_ambiguous,size = "","",0,0,0
 table = defaultdict(list)
 def record():
+    if not os.path.exists("/home/gzip/fastq/hdd_files/"+os.path.basename(filename)):
+        print("not recording stats for file",os.path.basename(filename),"might be multipart/blocked")
+        return
     #success = 1 if (nb_reads > 0 and nb_ambiguous == 0) else 0 
     success = ((1.0*nb_reads)/(nb_reads+nb_ambiguous)) if nb_reads > 0 else 0
     table[compression_mode]+=[(filename,size,success)]
@@ -22,11 +26,12 @@ for line in open(sys.argv[1]):
        size = int(line.split()[line.split().index("seek")-1])
     if "done, printed" in line:
         nb_reads = int(line.split()[2])
-
     if "and also didn't print" in line:
         nb_ambiguous = int(line.split()[4])
     else:
         nb_ambiguous = 0
+    if "at decoded block" in line:
+        nb_blocks = 
 record()
 print("----")
 all_sum = 0
@@ -49,3 +54,10 @@ for compression_mode in table:
 all_sum /= 1024*1024*1024.0
 all_success *= 100.0/nb_files
 print("Total",nb_files,all_sum,all_success)
+
+# save to tinydb
+from tinydb import TinyDB, Query
+db = TinyDB('db.json')
+for compression_mode in table:
+    for (filename, size, success) in table[compression_mode]:
+        db.insert({'filename': filename, 'compression_level': compression_mode, 'size' : size})
