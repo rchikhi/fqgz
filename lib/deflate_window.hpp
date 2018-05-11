@@ -252,17 +252,26 @@ class AsciiOnly : public _Base
 };
 
 template<typename _Base = DeflateWindow<>>
-class DummyContext : public _Base
+class NoFlush : public _Base
 {
     using Base = _Base;
 
   public:
     using Base::Base;
     using typename Base::wsize_t;
+    wsize_t flush(wsize_t = 0) { return 0; }
+};
+
+template<typename _Base = DeflateWindow<>>
+class DummyContext : public NoFlush<_Base>
+{
+    using Base = NoFlush<_Base>;
+
+  public:
+    using Base::Base;
+    using typename Base::wsize_t;
 
     void clear(wsize_t begin = 0) { Base::clear(begin + this->context_size); }
-
-    wsize_t flush(wsize_t = 0) { return 0; }
 };
 
 template<typename _Base = DeflateWindow<>, typename _Base::char_t unknown_fill = typename _Base::char_t('?')>

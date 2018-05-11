@@ -123,7 +123,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor* d,
     double compression_ratio = double(decoded_size) / double(in_end - in_next - 8);
     PRINT_DEBUG("Deompressed size %lu, compression factor %f\n", decoded_size, compression_ratio);
 
-    nthreads = std::min(1 + unsigned(in_nbytes >> 26), nthreads);
+    nthreads = std::min(1 + unsigned(in_nbytes >> 23), nthreads);
     if (nthreads <= 1) {
         /* Compressed data  */
         result = libdeflate_deflate_decompress(
@@ -135,8 +135,10 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor* d,
         threads.reserve(nthreads);
         std::vector<synchronizer> syncs(nthreads - 1);
 
-        size_t first_chunk_size = ((in_end - in_next) - skip) / nthreads + (1UL << 24);
-        size_t chunk_size = ((in_end - in_next) - first_chunk_size) / (nthreads - 1);
+
+        size_t chunk_size = std::min(size_t(in_end - in_next - skip) / nthreads, size_t((1UL<<31)/3.5));
+        size_t first_chunk_size = chunk_size + (1UL << 22);
+        chunk_size = (nthreads * chunk_size - first_chunk_size) / (nthreads - 1);
 
         size_t start = skip;
         synchronizer* prev_sync = nullptr;
