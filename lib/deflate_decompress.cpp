@@ -1256,6 +1256,7 @@ public:
         current_blk = next;
 
         block_size = 0;
+        nb_blocks = 0;
         total_block_size = 0;
         previous_rewind = 0;
         nb_reads_printed = 0;
@@ -1491,7 +1492,7 @@ public:
                 {
                     if (fully_reconstructed)
                     {
-                        //fprintf(stderr,"undetermined seq: %.*s\n",read_length,buffer+start_read);
+                        //fprintf(stderr,"undetermined seq: %.*s at block %u\n",read_length,buffer+start_read,nb_blocks);
                         //unsolved_reads.push_back(current_sequence);
                         nb_unsolved_reads++;
                     }
@@ -1520,7 +1521,7 @@ public:
     }
 
     // parse sequences in block, decide if it's fully reconstructed, if so, output all reads
-    void parse_block(unsigned decoded_block, synchronizer* stop, bool is_final_block)
+    void parse_block(synchronizer* stop, bool is_final_block)
     {
         unsigned min_read_length = 35; 
         long int start_pos = size()-block_size;
@@ -1539,7 +1540,7 @@ public:
 #ifdef DEBUG_BUFFER
         // print whole block!
         //if (fully_reconstructed){
-        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += "[" + std::to_string(buffer_counts[j]) + "," + std::to_string(backref_origins[j]) + "]"; } fprintf(stderr,"raw buffer of block %d: %s\n",decoded_block, buf_str.c_str());
+        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += "[" + std::to_string(buffer_counts[j]) + "," + std::to_string(backref_origins[j]) + "]"; } fprintf(stderr,"raw buffer of block %d: %s\n",nb_blocks, buf_str.c_str());
         //}
 #endif
 
@@ -1576,8 +1577,6 @@ public:
         }
 
         fully_reconstructed = !incomplete_context;
-
-        DEBUG_FIRST_BLOCK(exit(1);)
     }
 
 
@@ -1702,6 +1701,7 @@ public:
         len_back_refs_in_block = 0;
         total_block_size += block_size;
         block_size = 0;
+        nb_blocks ++;
         flush(); // force a flush at the beginning of each block so that buffer will contain exactly a block
     }
 
@@ -1738,6 +1738,7 @@ public:
     unsigned total_block_size;
     unsigned nb_back_refs_in_block;
     unsigned len_back_refs_in_block;
+    unsigned nb_blocks;
 
     uint32_t /* const (FIXME, Rayan: same as InputStream*/ *buffer_counts; /// Allocated counts for keeping track of how many back references in the buffer
     // Offsets in the primary unknown context window
@@ -1890,6 +1891,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         if (unlikely(length - 1 >= out.available())) {
                 if (likely(length == HUFFDEC_END_OF_BLOCK_LENGTH))
                 {
+                    DEBUG_FIRST_BLOCK(exit(1);)
                     return true; // Block done
                 } else {
                         //out.flush(); // same as above
@@ -1927,7 +1929,7 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
         }
         out.copy_match(length, offset);
     }
-
+    DEBUG_FIRST_BLOCK(exit(1);)
     return true;
 }
 
@@ -2069,7 +2071,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     // blocks counter
     int failed_decomp_counter = 0;
-    uint64_t decoded_blocks = 0;
 
     // handle skipping
     signed int until_counter = -1;
@@ -2107,7 +2108,6 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
         if (likely(went_fine))
         {
-            decoded_blocks++;
             aligned = true; // found a way to fully decompress a block, seems that we're good
 
             //fprintf(stderr,"block decompressed!\n");//, out_window.buffer);
@@ -2128,7 +2128,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
             {
                 bool previously_reconstructed = out_window.fully_reconstructed;
 
-                out_window.parse_block(decoded_blocks, stop, is_final_block);
+                out_window.parse_block(stop, is_final_block);
 
                 if ((!previously_reconstructed) && out_window.fully_reconstructed) {
                     if(prev_sync != nullptr) {
@@ -2137,11 +2137,11 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                         prev_sync->signal_first_decoded_sequence(block_inpos, 0 /* we don't need to record that anymore, now whole block is decomp or not */);
                     }
 
-                    fprintf(stderr,"successfully decoded reads & resolved context at decoded block %ld, mean block size %.1f\n",decoded_blocks,1.0*(out_window.total_block_size+out_window.block_size)/decoded_blocks);
+                    fprintf(stderr,"successfully decoded reads & resolved context at decoded block %u, mean block size %.1f\n",out_window.nb_blocks,1.0*(out_window.total_block_size+out_window.block_size)/(out_window.nb_blocks+1));
                 }
                 
                 if (previously_reconstructed && (!out_window.fully_reconstructed) && (keep_going /* needed because final window will be flagged*/)) {
-                    fprintf(stderr,"argh! we thought we had a complete context but actually decoded block %ld didn't parse well\n",decoded_blocks);
+                    fprintf(stderr,"argh! we thought we had a complete context but actually decoded block %u didn't parse well\n",out_window.nb_blocks);
                     exit(1);
                 }
             }
