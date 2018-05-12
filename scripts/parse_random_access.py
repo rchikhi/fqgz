@@ -2,16 +2,20 @@ import numpy as np
 import os
 import sys
 from collections import defaultdict
-filename, compression_mode, nb_reads, nb_ambiguous, size, nb_skipped_bytes = "","",0,0,0,-1
+skip_list = open("skip_list").read().split()
+print("skip",skip_list)
+filename, compression_mode, nb_reads, nb_ambiguous, size, nb_skipped_bytes, barcode_length = "","",0,0,0,-1, 0
 table = defaultdict(list)
 def record():
+    if os.path.basename(filename) in skip_list: 
+        return
     if not os.path.exists("/home/gzip/fastq/hdd_files/"+os.path.basename(filename)):
         print("not recording stats for file",os.path.basename(filename),"might be multipart/blocked")
         return
     #success = 1 if (nb_reads > 0 and nb_ambiguous == 0) else 0 
     success = ((1.0*nb_reads)/(nb_reads+nb_ambiguous)) if nb_reads > 0 else 0
-    table[compression_mode]+=[(filename,size,nb_skipped_bytes,success)]
-    print(filename,compression_mode,size,nb_reads,nb_ambiguous,success,nb_skipped_bytes)
+    table[compression_mode]+=[(filename,size,barcode_length,nb_skipped_bytes,success)]
+    print(filename,compression_mode,size,barcode_length,nb_reads,nb_ambiguous,success,nb_skipped_bytes)
 
 for line in open(sys.argv[1]):
     if ".gz" in line:
@@ -26,7 +30,7 @@ for line in open(sys.argv[1]):
        if filename.endswith("ERA987833-CNC_CasAF3_CRI1strepeat_rep1_R1.fastq.gz"):
            compression_mode = "best" # clearly not a gzip -1, it compresses even better than gzip -9, so maybe zopfli
        size = int(line.split()[line.split().index("seek")-1])
-       nb_reads, nb_ambiguous, nb_skipped_bytes = 0,0,-1
+       nb_reads, nb_ambiguous, nb_skipped_bytes, barcode_length = 0,0,-1, 0
     if "done, printed" in line:
         nb_reads = int(line.split()[2])
     if "and also didn't print" in line:
@@ -36,6 +40,8 @@ for line in open(sys.argv[1]):
     if "at decoded block" in line and len(line.split()) > 13:
         nb_blocks, mean_block_length = int(line.split()[9].strip(',')), float(line.split()[13])
         nb_skipped_bytes = nb_blocks * mean_block_length
+    if "barcode" in line:
+        barcode_length = len(line.split()[-1])
 
 record()
 
@@ -48,7 +54,7 @@ print("%10s" % "comp", "%5s" % "files","%5s"  % "size", "%12s" % "skipped", "%12
 all_sizes, all_successes, all_skipped_bytes = [],[],[]
 for compression_mode in table:
     sizes, successes, skipped_bytes = [], [], []
-    for (filename, size, skipped, success) in table[compression_mode]:
+    for (filename, size, barcode_length, skipped, success) in table[compression_mode]:
         sizes.append(size)
         successes.append(success)
         if skipped != -1:
@@ -68,6 +74,11 @@ print("%10s" % "Total", "%5d" % len(all_sizes), "%5.1f" % (sum(all_sizes)/(1024*
 # save to tinydb
 from tinydb import TinyDB, Query
 db = TinyDB('db.json')
+query = Query()
 for compression_mode in table:
-    for (filename, size, nb_skipped_bytes, success) in table[compression_mode]:
-        db.insert({'filename': filename, 'compression_level': compression_mode, 'size' : size, 'nb_skipped_bytes': nb_skipped_bytes })
+    for (filename, size, barcode_length, nb_skipped_bytes, success) in table[compression_mode]:
+        if len(db.search(query.filename == filename)) == 0:
+            db.insert({'filename': filename})
+        db.update({'compression_level': compression_mode, 'size' : size, 'nb_skipped_bytes': nb_skipped_bytes },  query.filename == filename)
+        if barcode_length > 0:
+           db.update({'barcode': barcode_length}, query.filename == filename)
