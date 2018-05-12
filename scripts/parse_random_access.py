@@ -4,9 +4,10 @@ import sys
 from collections import defaultdict
 skip_list = open("skip_list").read().split()
 print("skip",skip_list)
-filename, compression_mode, nb_reads, nb_ambiguous, size, nb_skipped_bytes, barcode_length = "","",0,0,0,-1, 0
+filename, compression_mode, nb_reads, nb_ambiguous, size, nb_skipped_bytes, barcode_length, repetitions = "","",0,0,0,-1,0,0
 table = defaultdict(list)
 def record():
+    global nb_skipped_bytes
     if os.path.basename(filename) in skip_list: 
         return
     if not os.path.exists("/home/gzip/fastq/hdd_files/"+os.path.basename(filename)):
@@ -14,13 +15,18 @@ def record():
         return
     #success = 1 if (nb_reads > 0 and nb_ambiguous == 0) else 0 
     success = ((1.0*nb_reads)/(nb_reads+nb_ambiguous)) if nb_reads > 0 else 0
+    nb_skipped_bytes /= repetitions
     table[compression_mode]+=[(filename,size,barcode_length,nb_skipped_bytes,success)]
     print(filename,compression_mode,size,barcode_length,nb_reads,nb_ambiguous,success,nb_skipped_bytes)
 
 for line in open(sys.argv[1]):
     if ".gz" in line:
+       new_filename = line.split(":")[0]
+       if new_filename == filename:
+           repetitions += 1
+           continue # just a different execution of same file, we'll record everything when at the next different file
        if filename != "": record()
-       filename = line.split(":")[0]
+       filename = new_filename
        if "max speed" in line:
             compression_mode = "lowest"
        elif "max compression" in line:
@@ -29,17 +35,19 @@ for line in open(sys.argv[1]):
             compression_mode = "normal"
        if filename.endswith("ERA987833-CNC_CasAF3_CRI1strepeat_rep1_R1.fastq.gz"):
            compression_mode = "best" # clearly not a gzip -1, it compresses even better than gzip -9, so maybe zopfli
+       if filename.endswith("ERA972101-1503_TGACCA_L005_R1_001.fastq.gz"):
+           compression_mode = "best" #same
+
        size = int(line.split()[line.split().index("seek")-1])
-       nb_reads, nb_ambiguous, nb_skipped_bytes, barcode_length = 0,0,-1, 0
+       nb_reads, nb_ambiguous, nb_skipped_bytes, barcode_length, repetitions = 0,0,-1, 0, 0
     if "done, printed" in line:
-        nb_reads = int(line.split()[2])
+        nb_reads += int(line.split()[2])
     if "and also didn't print" in line:
-        nb_ambiguous = int(line.split()[4])
-    else:
-        nb_ambiguous = 0
+        nb_ambiguous += int(line.split()[4])
     if "at decoded block" in line and len(line.split()) > 13:
-        nb_blocks, mean_block_length = int(line.split()[9].strip(',')), float(line.split()[13])
-        nb_skipped_bytes = nb_blocks * mean_block_length
+        nb_blocks = int(line.split()[9].strip(','))
+        mean_block_length =  float(line.split()[13])
+        nb_skipped_bytes += nb_blocks * mean_block_length
     if "barcode" in line:
         barcode_length = len(line.split()[-1])
 
