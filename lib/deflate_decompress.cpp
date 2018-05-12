@@ -1424,6 +1424,9 @@ public:
                 i++;
             }
 
+            if ((i> start_read) && buffer[i-1] == '|')
+                nb_undetermined_parts++;
+
             unsigned read_length = i - start_read;
 
             // if we end up at a non-|, non-\n character that's also not dna, clearly it has to be quality values, discard that portion
