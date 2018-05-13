@@ -1083,7 +1083,7 @@ struct OutputBuffer {
     }
     void flush() {
         if(size() == 0) return;
-        if(write(1, begin, size()) != size()) {
+        if(write(1, begin, size()) != (ssize_t)size()) {
             fprintf(stderr, "write error\n");
             exit(1);
         }
@@ -1566,7 +1566,7 @@ public:
     }
 
     // parse sequences in block, decide if it's fully reconstructed, if so, output all reads
-    void parse_block(synchronizer* stop, bool is_final_block)
+    void parse_block(bool is_final_block)
     {
         unsigned min_read_length = 35; 
         long int start_pos = size()-block_size;
@@ -1811,15 +1811,16 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
 
     public:
     FASTQParserDeflateWindow(byte* target, byte* target_end) :
-        InstrDeflateWindow(target, target_end)
+        InstrDeflateWindow(target, target_end), dont_record(true)
     {
         clear(); // for some reason, need to call it, even though base class will call it too
     }
 
     void clear()
     {
-        state = State::None;
+        reset_state('\0');
         incomplete_context = false;
+        fully_reconstructed = false;
         Base::clear(); // :)
     }
 
@@ -1836,9 +1837,12 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
             //update_state_flipped(*j,j);
     }
 
-    void reset_state()
+    void reset_state(byte c)
     {
-        state = State::None;
+        if (c == '\n' || c == '|')
+            state = State::LeftTrailing;
+        else
+            state = State::None;
         nb_undetermined_parts = 0;
         position_before_last_undetermined = 0;
         position_after_last_undetermined = 0;
@@ -1856,6 +1860,8 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
 
     void update_state(byte c, byte* const position)
     {
+        if (unlikely(dont_record)) return;
+
         switch(state)
         {
             case State::None: // looking for left trailing (T)
@@ -1873,7 +1879,7 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
                 else
                 {
                     if (! (c == '|' || c == '\n')) // keep reading left trailing chars (T^+)
-                        reset_state();
+                        reset_state(c);
                 }
                 break;
 
@@ -1889,9 +1895,9 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
                     else
                     {
                         if (c == '\n')
-                            end_of_dna(position);
+                            end_of_dna(position, c);
                         else // if that's not a | nor a \n, it means we were parsing quality values
-                            reset_state();
+                            reset_state(c);
                     }
 
                 }
@@ -1907,17 +1913,17 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
                 else
                 {
                     if (c != '|') // keep reading U^+, otherwise..
-                        end_of_dna(position);
+                        end_of_dna(position, c);
                 }
                 break;
 
             case State::PostRead:
                 if (--wait_post_read == 0)
-                    state = None;
+                    reset_state(c);
             break;
         }
         
-        //fprintf(stderr,"parsing char %c at pos %X, state: %s\n",(c=='\n')?'\\n':c, position, state_str());
+        //fprintf(stderr,"parsing char %c at pos %X, state: %s\n",(c=='\n')?'n':c, position, state_str());
     }
 
     inline void update_state_flipped(const byte c, byte* const position)
@@ -1957,15 +1963,15 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
             if (likely((!isUndetermined) && (!isNewline)))
             {
                 if (unlikely(state == State::LeftTrailing))
-                    reset_state();
+                    reset_state(c);
                 else
                 {
                     if (unlikely(state == State::InDNA))
-                        reset_state();
+                        reset_state(c);
                     else 
                     {
                         if (unlikely(state == State::InDNAU))
-                            end_of_dna(position);
+                            end_of_dna(position, c);
                     }
                 }
             }
@@ -1983,17 +1989,17 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
                     if (unlikely(isNewline))
                     {
                         if (state == State::None)       state = State::LeftTrailing;
-                        else if (state == State::InDNA || state== State::InDNAU) end_of_dna(position);
+                        else if (state == State::InDNA || state== State::InDNAU) end_of_dna(position, c);
                     }
                 }
             }
         }
 
-       //fprintf(stderr,"parsing char %c at pos %X, state: %s\n",(c=='\n')?'\\n':c, position, state_str());
+       //fprintf(stderr,"parsing char %c at pos %X, state: %s\n",(c=='\n')?'n':c, position, state_str());
     }
 
 
-    void end_of_dna(byte* const position)
+    void end_of_dna(byte* const position, byte c)
     {
         unsigned read_length = position-start_read;
         const unsigned min_read_length = 35;
@@ -2002,7 +2008,7 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
 
         if (read_length < min_read_length)
         {
-            reset_state();
+            reset_state(c);
             return; // discard small sequences, likely not reads
         }
         
@@ -2029,11 +2035,12 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
             {
                 //fprintf(stderr,"possibly removing header from\t %.*s to\n%.*s\n",read_length,start_read,same_readlength,position_after_last_undetermined);
                 start_read = position_after_last_undetermined;
-                read_length = position-start_read;
+                read_length = same_readlength;
                 nb_undetermined_parts--;
             }
             else
             {
+                // using position_before_last_undetermined isnt ideal because we may already be treating a read like: ACTG|CGG| where CGG is quality 
                 if (same_readlength == position_before_last_undetermined - start_read+1)
                 {
                     //fprintf(stderr,"possibly removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,start_read,same_readlength,start_read);
@@ -2046,9 +2053,13 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
         if (nb_undetermined_parts > 0)
         {
             if (fully_reconstructed)
+            {
+                //fprintf(stderr,"undetermined seq: %.*s at block %u\n",read_length,start_read,nb_blocks);
                 nb_unsolved_reads++;
+            }
             else
                 incomplete_context = true;
+            reset_state(c);
         }
         else
         {
@@ -2061,22 +2072,26 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
             putative_sequences.push_back(std::make_tuple(start_read-buffer,read_length));
 
             wait_post_read = read_length + 5; // heuristic, skipping the '\n+\nquality\n' after the read
+            reset_state(c);
+            if (fully_reconstructed)
+                state = State::PostRead;
         }
-        reset_state();
     }
 
 
-    void parse_block(synchronizer* stop, bool is_final_block)
+    void parse_block(bool is_final_block)
     {
+#ifdef DEBUG_BUFFER
+        // print whole block!
+        //if (fully_reconstructed){
+        std::string buf_str; for (unsigned j = (1<<15); j < size(); j ++) { buf_str += buffer[j]; if (buffer[j] == '|') buf_str += "[" + std::to_string(buffer_counts[j]) + "," + std::to_string(backref_origins[j]) + "]"; } fprintf(stderr,"raw buffer of block %d: %s\n",nb_blocks, buf_str.c_str());
+        //}
+#endif
+
         if (putative_sequences.size() >= 10 && (!incomplete_context)) // heuristic 
             fully_reconstructed = true;
 
-        PRINT_DEBUG("end of block, status: total buffer size %d, ", (int)(next-buffer));
-        if (fully_reconstructed) {
-            PRINT_DEBUG("fully reconstructed, %d reads\n", putative_sequences.size()); 
-        } else {
-            PRINT_DEBUG("incomplete, %d reads\n ", putative_sequences.size());
-        }
+        PRINT_DEBUG("end of block, status: total buffer size %d, fully reconstructed? %d, nb reads: %d", (int)(next-buffer), fully_reconstructed, putative_sequences());
 
         if (fully_reconstructed)
         { 
@@ -2084,7 +2099,8 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
             {
                 unsigned offset = std::get<0>(seq_tuple);
                 int length = std::get<1>(seq_tuple);
-                printf("%.*s\n",length,buffer+offset);
+                //printf("%.*s\n",length,buffer+offset);
+                output.add_sequence(buffer+offset, length);
                 nb_reads_printed ++; // record this for later
             }
         }
@@ -2092,7 +2108,7 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
     
     void notify_end_block(InputStream& in_stream){
         putative_sequences.clear();
-        incomplete_context = (nb_undetermined_parts > 0);
+        incomplete_context = (nb_undetermined_parts > 0); // relative to the potential inter-block sequence being parsed
         size_t window_size = 1 << 15;
         size_t moved_by = (next - window_size) - buffer;
         start_read -= moved_by;
@@ -2101,9 +2117,21 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
         Base::notify_end_block(in_stream);
     }
     
+    bool check_ascii() {
+        bool res = Base::check_ascii();
+        if (res)
+        {
+            dont_record = false;
+            for (byte* j = buffer+(1<<15); j < next; j++) // prime the very first decoded block
+                update_state(*j,j);
+        }
+        return res;
+    }
+    
     enum State { None, LeftTrailing, InDNA, InDNAU, PostRead};
     State state;
 
+    bool dont_record;
     byte *start_read;
     uint16_t nb_undetermined_parts;
     byte *position_before_last_undetermined;
@@ -2116,7 +2144,8 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
 typedef FASTQParserDeflateWindow ParsingDeflateWindow; 
 //typedef InstrDeflateWindow ParsingDeflateWindow;
 
-bool do_uncompressed(InputStream& in_stream, ParsingDeflateWindow& out) {
+template < typename WindowType>
+bool do_uncompressed(InputStream& in_stream, WindowType& out) {
     /* Uncompressed block: copy 'len' bytes literally from the input
      * buffer to the output buffer.  */
 
@@ -2148,7 +2177,8 @@ bool do_uncompressed(InputStream& in_stream, ParsingDeflateWindow& out) {
 }
 
 /* return true if block decompression went smoothly, false if not (probably due to corrupt data) */
-bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, ParsingDeflateWindow& out, bool &is_final_block)
+template <typename WindowType>
+bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, WindowType& out, bool &is_final_block)
 {
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
@@ -2326,7 +2356,7 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     // very basic, decompress first block
     bool dummy;
     InputStream in_stream(in, in_nbytes);
-    ParsingDeflateWindow out_window(nullptr, nullptr);
+    InstrDeflateWindow out_window(nullptr, nullptr);
     do_block(d, in_stream, out_window, dummy);
 
     byte beg[10000]; // assumes reads are shorter than 5kbp
@@ -2447,6 +2477,16 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         //PRINT_DEBUG("before block,             out window %x - %x\n", out_window.next, out_window.buffer_end);
 
         size_t block_inpos = in_stream.position();
+
+        if(stop != nullptr && keep_going) {
+            keep_going &= ! stop->caught_up_block(block_inpos);
+            if(keep_going == false)
+            {
+                fprintf(stderr, "thread %lu stopped at %lu\n", pthread_self(), block_inpos);
+                continue;
+            }
+        }
+
         in_stream.ensure_bits<1>();
         bool went_fine = aligned || in_stream.bits(1) == 0; 
         bool is_final_block = false;
@@ -2472,17 +2512,11 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
                 break;
             handle_skip(skip_counter, out_window);
 
-            if(stop != nullptr && keep_going) {
-                keep_going &= ! stop->caught_up_block(block_inpos);
-                if(keep_going == false)
-                    fprintf(stderr, "thread %lu stopped at %lu\n", pthread_self(), block_inpos);
-            }
-
             if (skip_counter == 0 && keep_going)
             {
                 bool previously_reconstructed = out_window.fully_reconstructed;
 
-                out_window.parse_block(stop, is_final_block);
+                out_window.parse_block(is_final_block);
 
                 if ((!previously_reconstructed) && out_window.fully_reconstructed) {
                     if(prev_sync != nullptr) {
