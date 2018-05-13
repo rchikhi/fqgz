@@ -1089,7 +1089,6 @@ public:
         *next++ = c;
     }
 
-    /* return true if it's a reasonable offset, otherwise false */
     void copy_match(unsigned length, unsigned offset) {
         /* The match source must not begin before the beginning of the
          * output buffer.  */
@@ -1423,9 +1422,6 @@ public:
 
                 i++;
             }
-
-            if ((i> start_read) && buffer[i-1] == '|')
-                nb_undetermined_parts++;
 
             unsigned read_length = i - start_read;
 
@@ -1762,10 +1758,317 @@ public:
     unsigned nb_reads_printed;
 };
 
+class FASTQParserDeflateWindow : public InstrDeflateWindow {
+    using Base = InstrDeflateWindow;
+
+    public:
+    FASTQParserDeflateWindow(byte* target, byte* target_end) :
+        InstrDeflateWindow(target, target_end)
+    {
+        clear(); // for some reason, need to call it, even though base class will call it too
+    }
+
+    void clear()
+    {
+        state = State::None;
+        incomplete_context = false;
+        Base::clear(); // :)
+    }
+
+    void push(byte c) {
+        Base::push(c);
+        //update_state_flipped(c, next);
+        update_state(c, next-1);
+    }
+
+    void copy_match(unsigned length, unsigned offset) {
+        Base::copy_match(length, offset);
+        for (byte *j = next-length; j < next; j++)
+            update_state(*j,j);
+            //update_state_flipped(*j,j);
+    }
+
+    void reset_state()
+    {
+        state = State::None;
+        nb_undetermined_parts = 0;
+        position_before_last_undetermined = 0;
+        position_after_last_undetermined = 0;
+    }
+
+    const char *state_str()
+    {
+        if (state == State::None)   return "None";
+        if (state == State::LeftTrailing)  return "LeftTrailing";
+        if (state == State::InDNA)  return "InDNA";
+        if (state == State::InDNAU) return "InDNAU";
+        if (state == State::PostRead) return "PostRead";
+        return "unknown, spooky";
+    }
+
+    void update_state(byte c, byte* const position)
+    {
+        switch(state)
+        {
+            case State::None: // looking for left trailing (T)
+                if (c == '|' || c == '\n') 
+                    state = State::LeftTrailing;
+                break;
+
+            case State::LeftTrailing:
+                if ( ascii2Dna[c] > 0) // found DNA (D)
+                {
+                    start_read = position;
+                    position_after_last_undetermined = position;
+                    state = State::InDNA;
+                }
+                else
+                {
+                    if (! (c == '|' || c == '\n')) // keep reading left trailing chars (T^+)
+                        reset_state();
+                }
+                break;
+
+            case State::InDNA:
+                if ( ascii2Dna[c] == 0) // keep reading DNA, otherwise..
+                {
+                    if (c == '|') // okay to have U^+ in our sequences
+                    {
+                        state = State::InDNAU;
+                        //nb_undetermined_parts++; // let's rather count undetermined parts after we've gone back to dna
+                        position_before_last_undetermined = position;
+                    }
+                    else
+                    {
+                        if (c == '\n')
+                            end_of_dna(position);
+                        else // if that's not a | nor a \n, it means we were parsing quality values
+                            reset_state();
+                    }
+
+                }
+                break;
+
+            case State::InDNAU:
+                if ( ascii2Dna[c] > 0) // back from U^+ to D^+
+                {
+                    nb_undetermined_parts++;
+                    position_after_last_undetermined = position;
+                    state = State::InDNA;
+                }
+                else
+                {
+                    if (c != '|') // keep reading U^+, otherwise..
+                        end_of_dna(position);
+                }
+                break;
+
+            case State::PostRead:
+                if (--wait_post_read == 0)
+                    state = None;
+            break;
+        }
+        
+        //fprintf(stderr,"parsing char %c at pos %X, state: %s\n",(c=='\n')?'\\n':c, position, state_str());
+    }
+
+    inline void update_state_flipped(const byte c, byte* const position)
+    {
+        const bool isDNA = ascii2Dna[c] > 0;
+        const bool isUndetermined = (c == '|');
+        const bool isNewline = (c == '\n');
+
+        // None: if | or \n, go LeftTrailing
+        // LeftTrailing: if DNA go inDNA, if | or \n do nothing, otherwise reset 
+        // InDNA: if DNA no nothing, | go InDNAU, \n end_of_dna, otherwise reset 
+        // InDNAU: if DNA go DNA, | do nothing, other: end_of_dna
+        // flipped:
+        // if | (unlikely):
+        //      if state==None, go LeftTrailing
+        //      if state==InDNA, go InDNAU
+        // if \n (unlikely):
+        //      if state==Nnoe, go LeftTrailing
+        //      if state==InDNA or InDNAU, end_of_dna
+        // if DNA (likely):
+        //      if state==LeftTrailing go InDNA
+        //      if state==InDNAU go InDNA
+        // if other character (likely)
+        //      if state==LeftTrailing, DNA, DNAU: reset
+        if (isDNA)
+        {
+            if (unlikely(state==State::LeftTrailing)) { state = State::InDNA;
+                    start_read = position;
+            }
+            else if (unlikely(state==State::InDNAU))  { state = State::InDNA;
+                    nb_undetermined_parts++;
+                    position_after_last_undetermined = position;
+            }
+        }
+        else
+        {
+            if (likely((!isUndetermined) && (!isNewline)))
+            {
+                if (unlikely(state == State::LeftTrailing))
+                    reset_state();
+                else
+                {
+                    if (unlikely(state == State::InDNA))
+                        reset_state();
+                    else 
+                    {
+                        if (unlikely(state == State::InDNAU))
+                            end_of_dna(position);
+                    }
+                }
+            }
+            else
+            {
+                if (unlikely(isUndetermined))
+                {
+                    if (state == State::None)         state = State::LeftTrailing;
+                    else if (state == State::InDNA) { state = State::InDNAU;
+                        position_before_last_undetermined = position;
+                    }
+                }
+                else
+                {
+                    if (unlikely(isNewline))
+                    {
+                        if (state == State::None)       state = State::LeftTrailing;
+                        else if (state == State::InDNA || state== State::InDNAU) end_of_dna(position);
+                    }
+                }
+            }
+        }
+
+       //fprintf(stderr,"parsing char %c at pos %X, state: %s\n",(c=='\n')?'\\n':c, position, state_str());
+    }
 
 
+    void end_of_dna(byte* const position)
+    {
+        unsigned read_length = position-start_read;
+        const unsigned min_read_length = 35;
+        
+        //fprintf(stderr,"end, readlen: %X %X\n", position, start_read);
 
-bool do_uncompressed(InputStream& in_stream, InstrDeflateWindow& out) {
+        if (read_length < min_read_length)
+        {
+            reset_state();
+            return; // discard small sequences, likely not reads
+        }
+        
+        //fprintf(stderr,"got some sort of seq: %.*s\n",read_length,start_read);
+
+        // trim trailing |'s
+        if (state == State::InDNAU)
+        {
+            if (position_before_last_undetermined > 0)
+                read_length = position_before_last_undetermined - start_read;
+            else
+            {
+                read_length = 0;
+                nb_undetermined_parts = 0;
+            }
+        }
+
+        // heuristic: rescue some undetermined reads if we have guessed that the read length is fixed
+        if (unlikely(nb_undetermined_parts == 1 && (same_readlength > 0) && (read_length > same_readlength)))
+        {
+            //fprintf(stderr,"possibly something can be done about this sequence: %.*s\n",read_length,start_read);
+            //fprintf(stderr,"possibly %d %d\n",same_readlength,read_length - (position_after_last_undetermined-start_read));
+            if (same_readlength == read_length - (position_after_last_undetermined-start_read))
+            {
+                //fprintf(stderr,"possibly removing header from\t %.*s to\n%.*s\n",read_length,start_read,same_readlength,position_after_last_undetermined);
+                start_read = position_after_last_undetermined;
+                read_length = position-start_read;
+                nb_undetermined_parts--;
+            }
+            else
+            {
+                if (same_readlength == position_before_last_undetermined - start_read+1)
+                {
+                    //fprintf(stderr,"possibly removing nucleotide-like quality from\t %.*s to\n%.*s\n",read_length,start_read,same_readlength,start_read);
+                    read_length = position_before_last_undetermined - start_read;
+                    nb_undetermined_parts--;
+                }
+            }
+        }
+
+        if (nb_undetermined_parts > 0)
+        {
+            if (fully_reconstructed)
+                nb_unsolved_reads++;
+            else
+                incomplete_context = true;
+        }
+        else
+        {
+            if (same_readlength > 0 && read_length != same_readlength && fully_reconstructed)
+            {
+                //fprintf(stderr,"unexpected length sequence: %.*s\n",read_length,start_read);
+                nb_unexpected_length_reads++;
+            }
+
+            putative_sequences.push_back(std::make_tuple(start_read-buffer,read_length));
+
+            wait_post_read = read_length + 5; // heuristic, skipping the '\n+\nquality\n' after the read
+        }
+        reset_state();
+    }
+
+
+    void parse_block(synchronizer* stop, bool is_final_block)
+    {
+        if (putative_sequences.size() >= 10 && (!incomplete_context)) // heuristic 
+            fully_reconstructed = true;
+
+        PRINT_DEBUG("end of block, status: total buffer size %d, ", (int)(next-buffer));
+        if (fully_reconstructed) {
+            PRINT_DEBUG("fully reconstructed, %d reads\n", putative_sequences.size()); 
+        } else {
+            PRINT_DEBUG("incomplete, %d reads\n ", putative_sequences.size());
+        }
+
+        if (fully_reconstructed)
+        { 
+            for (auto seq_tuple: putative_sequences)
+            {
+                unsigned offset = std::get<0>(seq_tuple);
+                int length = std::get<1>(seq_tuple);
+                printf("%.*s\n",length,buffer+offset);
+                nb_reads_printed ++; // record this for later
+            }
+        }
+    }
+    
+    void notify_end_block(InputStream& in_stream){
+        putative_sequences.clear();
+        incomplete_context = (nb_undetermined_parts > 0);
+        size_t window_size = 1 << 15;
+        size_t moved_by = (next - window_size) - buffer;
+        start_read -= moved_by;
+        position_before_last_undetermined -= moved_by;
+        position_after_last_undetermined -= moved_by ;
+        Base::notify_end_block(in_stream);
+    }
+    
+    enum State { None, LeftTrailing, InDNA, InDNAU, PostRead};
+    State state;
+
+    byte *start_read;
+    uint16_t nb_undetermined_parts;
+    byte *position_before_last_undetermined;
+    byte *position_after_last_undetermined;
+    std::vector<std::tuple<unsigned,int>> putative_sequences;
+    bool incomplete_context;
+    unsigned wait_post_read;
+};
+
+typedef FASTQParserDeflateWindow ParsingDeflateWindow; 
+//typedef InstrDeflateWindow ParsingDeflateWindow;
+
+bool do_uncompressed(InputStream& in_stream, ParsingDeflateWindow& out) {
     /* Uncompressed block: copy 'len' bytes literally from the input
      * buffer to the output buffer.  */
 
@@ -1797,7 +2100,7 @@ bool do_uncompressed(InputStream& in_stream, InstrDeflateWindow& out) {
 }
 
 /* return true if block decompression went smoothly, false if not (probably due to corrupt data) */
-bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, InstrDeflateWindow& out, bool &is_final_block)
+bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, ParsingDeflateWindow& out, bool &is_final_block)
 {
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
@@ -1958,7 +2261,7 @@ bool handle_until(size_t until, int &until_counter, size_t position)
  * - don't output to target the first 20 blocks for sure
  * - start outputting to target when we are sure that the buffer window contains fully resolved sequences
  */
-void handle_skip(int &skip_counter,  InstrDeflateWindow &out_window)
+void handle_skip(int &skip_counter,  ParsingDeflateWindow &out_window)
 {
     if (skip_counter > 0)
         skip_counter--;
@@ -1975,7 +2278,7 @@ void estimate_file_structure(struct libdeflate_decompressor * restrict d, const 
     // very basic, decompress first block
     bool dummy;
     InputStream in_stream(in, in_nbytes);
-    InstrDeflateWindow out_window(nullptr, nullptr);
+    ParsingDeflateWindow out_window(nullptr, nullptr);
     do_block(d, in_stream, out_window, dummy);
 
     byte beg[10000]; // assumes reads are shorter than 5kbp
@@ -2067,8 +2370,8 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
 
     byte *out_next = out;
     byte * const out_end = out_next + out_nbytes_avail;
-    InstrDeflateWindow out_window(out, out_end);
-    InstrDeflateWindow backup_out(out, out_end);
+    ParsingDeflateWindow out_window(out, out_end);
+    ParsingDeflateWindow backup_out(out, out_end);
 
     estimate_file_structure(d, in, in_nbytes, out_window.header_length, out_window.quality_header_length, out_window.barcode, out_window.same_readlength);
 
