@@ -53,6 +53,7 @@
 #include <string>
 #include <set>
 #include <tuple>
+#include <unistd.h> // write()
 
 #include <stdexcept>
 #include <pthread.h>
@@ -1055,8 +1056,53 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
     return true;
 }
 
-#define output_buffer_bits 21 // FIXME: constructor parameter
+#define deflate_window_bits 21 // FIXME: constructor parameter
 // FIXME assumes that a gzip block can't be larger than 2 MB
+#define output_buffer_bits 21
+
+struct OutputBuffer {
+    OutputBuffer() :
+        begin(new byte[1UL << output_buffer_bits]),
+        next(begin),
+        end(begin + (1UL << output_buffer_bits)) {
+
+    }
+
+    ~OutputBuffer() {
+        flush(); // Flush remaining sequences
+        delete[] begin;
+    }
+
+    size_t size() const {
+        assert(next >= begin);
+        return next-begin;
+    }
+    size_t available() const {
+        assert(end >= next);
+        return end-next;
+    }
+    void flush() {
+        if(size() == 0) return;
+        if(write(1, begin, size()) != size()) {
+            fprintf(stderr, "write error\n");
+            exit(1);
+        }
+        next = begin;
+    }
+
+    void add_sequence(byte* from, size_t length) {
+        if(available() < length+1)
+            flush();
+
+        memcpy(next, from, length);
+        next += length;
+        *next++ = byte('\n');
+    }
+
+    byte* const begin;
+    byte* next;
+    const byte* const end;
+};
 
 /**
  * @brief A window of the size of one decoded shard (some deflate blocks) plus it's 32K context
@@ -1064,8 +1110,8 @@ bool prepare_static(struct libdeflate_decompressor * restrict d) {
 class DeflateWindow {
 public:
     DeflateWindow() :
-        buffer(new byte[1 << output_buffer_bits]),
-        buffer_end(buffer + (1 << output_buffer_bits))
+        buffer(new byte[1 << deflate_window_bits]),
+        buffer_end(buffer + (1 << deflate_window_bits))
     {
         clear();
     }
@@ -1236,8 +1282,8 @@ public:
         has_dummy_32k(true), output_to_target(true),
         fully_reconstructed(false),
         nb_back_refs_in_block(0), len_back_refs_in_block(0),
-        buffer_counts(new uint32_t[1 << output_buffer_bits]),
-        backref_origins(new uint16_t[1 << output_buffer_bits])
+        buffer_counts(new uint32_t[1 << deflate_window_bits]),
+        backref_origins(new uint16_t[1 << deflate_window_bits])
     {
         clear();
 
@@ -1572,8 +1618,8 @@ public:
             {
                 unsigned offset = std::get<0>(seq_tuple);
                 int length = std::get<1>(seq_tuple);
-                
-                printf("%.*s\n",length,buffer+offset);
+
+                output.add_sequence(buffer+offset, length);
 
                 nb_reads_printed ++; // record this for later
             }
@@ -1760,6 +1806,8 @@ public:
     unsigned nb_unsolved_reads;
     unsigned nb_unexpected_length_reads;
     unsigned nb_reads_printed;
+
+    OutputBuffer output = {};
 };
 
 
