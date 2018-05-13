@@ -1826,8 +1826,8 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
 
     void push(byte c) {
         Base::push(c);
-        //update_state_flipped(c, next);
         update_state(c, next-1);
+        //update_state_flipped(c, next-1);
     }
 
     void copy_match(unsigned length, unsigned offset) {
@@ -1873,7 +1873,7 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
                 if ( ascii2Dna[c] > 0) // found DNA (D)
                 {
                     start_read = position;
-                    position_after_last_undetermined = position;
+                    position_after_last_undetermined = position; // not exactly correct, as we might be right after a \n, not a |
                     state = State::InDNA;
                 }
                 else
@@ -1928,6 +1928,15 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
 
     inline void update_state_flipped(const byte c, byte* const position)
     {
+        if (unlikely(dont_record)) return;
+
+        if (state == State::PostRead)
+        {
+            if (--wait_post_read == 0)
+                reset_state(c);
+            return;
+        }
+
         const bool isDNA = ascii2Dna[c] > 0;
         const bool isUndetermined = (c == '|');
         const bool isNewline = (c == '\n');
@@ -1941,16 +1950,18 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
         //      if state==None, go LeftTrailing
         //      if state==InDNA, go InDNAU
         // if \n (unlikely):
-        //      if state==Nnoe, go LeftTrailing
+        //      if state==None, go LeftTrailing
         //      if state==InDNA or InDNAU, end_of_dna
         // if DNA (likely):
         //      if state==LeftTrailing go InDNA
         //      if state==InDNAU go InDNA
         // if other character (likely)
-        //      if state==LeftTrailing, DNA, DNAU: reset
+        //      if state==LeftTrailing, DNA: reset
+        //      if state==DNAU: end_of_dna (we might be at the beginning of a quality)
         if (isDNA)
         {
             if (unlikely(state==State::LeftTrailing)) { state = State::InDNA;
+                    position_after_last_undetermined = position;
                     start_read = position;
             }
             else if (unlikely(state==State::InDNAU))  { state = State::InDNA;
