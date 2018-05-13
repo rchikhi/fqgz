@@ -1424,8 +1424,8 @@ public:
                 i++;
             }
 
-            if ((i> start_read) && buffer[i-1] == '|')
-                nb_undetermined_parts++;
+            //if ((i> start_read) && buffer[i-1] == '|')
+            //    nb_undetermined_parts++;
 
             unsigned read_length = i - start_read;
 
