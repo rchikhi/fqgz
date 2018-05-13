@@ -1960,35 +1960,35 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
         //      if state==DNAU: end_of_dna (we might be at the beginning of a quality)
         if (isDNA)
         {
-            if (unlikely(state==State::LeftTrailing)) { state = State::InDNA;
+            if (state==State::LeftTrailing) { state = State::InDNA;
                     position_after_last_undetermined = position;
                     start_read = position;
             }
-            else if (unlikely(state==State::InDNAU))  { state = State::InDNA;
+            else if (state==State::InDNAU)  { state = State::InDNA;
                     nb_undetermined_parts++;
                     position_after_last_undetermined = position;
             }
         }
         else
         {
-            if (likely((!isUndetermined) && (!isNewline)))
+            if ((!isUndetermined) && (!isNewline))
             {
-                if (unlikely(state == State::LeftTrailing))
+                if (state == State::LeftTrailing)
                     reset_state(c);
                 else
                 {
-                    if (unlikely(state == State::InDNA))
+                    if (state == State::InDNA)
                         reset_state(c);
                     else 
                     {
-                        if (unlikely(state == State::InDNAU))
+                        if (state == State::InDNAU)
                             end_of_dna(position, c);
                     }
                 }
             }
             else
             {
-                if (unlikely(isUndetermined))
+                if (isUndetermined)
                 {
                     if (state == State::None)         state = State::LeftTrailing;
                     else if (state == State::InDNA) { state = State::InDNAU;
@@ -1997,7 +1997,7 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
                 }
                 else
                 {
-                    if (unlikely(isNewline))
+                    if (isNewline)
                     {
                         if (state == State::None)       state = State::LeftTrailing;
                         else if (state == State::InDNA || state== State::InDNAU) end_of_dna(position, c);
@@ -2192,7 +2192,7 @@ bool do_uncompressed(InputStream& in_stream, WindowType& out) {
 
 /* return true if block decompression went smoothly, false if not (probably due to corrupt data) */
 template <typename WindowType>
-bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, WindowType& out, bool &is_final_block)
+bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_stream, WindowType& out, bool &is_final_block, bool already_aligned=false)
 {
     /* Starting to read the next block.  */
     in_stream.ensure_bits<1 + 2 + 5 + 5 + 4>();
@@ -2259,8 +2259,8 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                     PRINT_DEBUG("first block is asking to flush already, probably bad\n");
                     return false;
                 }
-                //out.flush(); // shouldn't flush at that time, we want that char in the current buffer
-                fprintf(stderr,"wanted to flush now, but shouldn't\n");exit(1); // TODO remove that if it never happens
+                out.flush(); // shouldn't flush at that time, we want that char in the current buffer
+                //fprintf(stderr,"wanted to flush now, but shouldn't\n");exit(1); // TODO remove that if it never happens
             }
 
             if(unlikely(char(entry >> HUFFDEC_RESULT_SHIFT) > '~')) {
@@ -2292,8 +2292,8 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
                     DEBUG_FIRST_BLOCK(exit(1);)
                     return true; // Block done
                 } else {
-                        //out.flush(); // same as above
-                        fprintf(stderr,"wanted to flush now, but shouldn't\n");exit(1); // TODO remove that if it never happens
+                        out.flush(); // same as above
+                        //fprintf(stderr,"wanted to flush now, but shouldn't\n");exit(1); // TODO remove that if it never happens
                         assert(length <= out.available());
                 }
         }
@@ -2321,9 +2321,10 @@ bool do_block(struct libdeflate_decompressor * restrict d, InputStream& in_strea
 
         /* Copy the match: 'length' bytes at 'out_next - offset' to
          * 'out_next'.  */
-        if(!out.check_match(length, offset))
+        if (!already_aligned) // don't do this check on already aligned blocks, saves a bit of speed
         {
-            return false;
+            if(!out.check_match(length, offset))
+                return false;
         }
         out.copy_match(length, offset);
     }
@@ -2504,7 +2505,7 @@ libdeflate_deflate_decompress(struct libdeflate_decompressor * restrict d,
         in_stream.ensure_bits<1>();
         bool went_fine = aligned || in_stream.bits(1) == 0; 
         bool is_final_block = false;
-        if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block);
+        if(went_fine) went_fine = do_block(d, in_stream, out_window, is_final_block, aligned);
         if(unlikely(!aligned && went_fine)) {
             went_fine = out_window.size() > (1UL << 15) + (10UL << 10); // block needs to be larger than 10K
             if(went_fine) went_fine = out_window.check_ascii();
