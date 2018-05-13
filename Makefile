@@ -58,6 +58,12 @@ ifeq ($(buf),1)
 endif
 
 
+ifeq ($(oldparser),1)
+	 LIB_CFLAGS+= -DOLD_PARSER
+endif
+
+
+
 
 
 

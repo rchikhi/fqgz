@@ -2141,8 +2141,11 @@ class FASTQParserDeflateWindow : public InstrDeflateWindow {
     unsigned wait_post_read;
 };
 
+#ifdef OLD_PARSER
+typedef InstrDeflateWindow ParsingDeflateWindow;
+#else
 typedef FASTQParserDeflateWindow ParsingDeflateWindow; 
-//typedef InstrDeflateWindow ParsingDeflateWindow;
+#endif
 
 template < typename WindowType>
 bool do_uncompressed(InputStream& in_stream, WindowType& out) {
