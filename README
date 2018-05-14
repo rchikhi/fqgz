@@ -1,6 +1,6 @@
 # pugz
 
-Parallel decompression of gzipped text files
+Parallel decompression of gzipped text files.
 
 ## Getting Started
 
@@ -18,13 +18,19 @@ We provide a small example:
 
 ```
 cd example
-bash test.Sh
+bash test.sh
 ``` 
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
+This project is licensed under the MIT License.
 
 ## Citation 
 
 * Random access to gzip-compressed FASTQ files, in submission
+
+## Acknowledgements
+
+[ebiggers](https://github.com/ebiggers) for writing [libdeflate](https://github.com/ebiggers/libdeflate)
+
+
