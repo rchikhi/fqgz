@@ -9,9 +9,9 @@ Type `make` and
 
 Exactly as gunzip. Two new parameters:
 
-* `-t` controls the number of threads
+* `-t [n]` use `n` threads
 
-* `-s XXX` skip XXX bytes in the compressed file and start decompression from this offset. In practice, will start a little bit later.
+* `-s [p]` skip `p` bytes in the compressed file and start decompression as soon as a unambiguous block is found.
 
 ## Limitations
 
