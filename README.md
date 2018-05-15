@@ -3,7 +3,7 @@ This is `gunzip` except that there is a new `-t [int]` parameter that controls t
 
 ## Installing
 
-Type `make` and 
+Type `make`
 
 ## Usage 
 
