@@ -3,7 +3,15 @@ This is `gunzip` except that there is a new `-t [int]` parameter that controls t
 
 ## Installing
 
-Type `make` and use it exactly as gunzip
+Type `make` and 
+
+## Usage 
+
+Exactly as gunzip. Two new parameters:
+
+* `-t` controls the number of threads
+
+* `-s XXX` skip XXX bytes in the compressed file and start decompression from this offset. In practice, will start a little bit later.
 
 ## Limitations
 
