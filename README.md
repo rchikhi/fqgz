@@ -7,7 +7,7 @@ Type `make`
 
 ## Usage 
 
-Exactly as gunzip. Two new parameters:
+Exactly same as gunzip. Two new parameters:
 
 * `-t [n]` use `n` threads
 
