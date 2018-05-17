@@ -9,7 +9,7 @@ Parallel decompression of gzipped text files.
 Type:
 
 ```
-make
+make asserts=0
 ```
 
 ### Test
