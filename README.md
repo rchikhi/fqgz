@@ -15,4 +15,17 @@ Exactly same as gunzip. Two new parameters:
 
 ## Limitations
 
-Cannot compress, only decompress. In some files with normal/high compression levels, the program will not return all sequences.
+Cannot compress, only decompress. In some files with normal/high compression levels, the program will not return all sequences, but will also tell you how many sequences were not returned.
+
+## Citation
+
+Random access to sequences in gzip-compressed FASTQ files, submitted
+
+## Reproducibility
+
+We have included a few scripts that were used to create the results from the paper.
+
+* `paper/list_files`: list of 100 ENA files
+* `scripts/test_random_access.sh`: script that runs fqgz to obtain data for Table 1
+* `scripts/parse_random_access.py`: script that creates Table 1 from the output of the above script
+
