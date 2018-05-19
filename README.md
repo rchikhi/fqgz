@@ -13,6 +13,8 @@ Exactly same as gunzip. Two new parameters:
 
 * `-s [p]` skip `p` bytes in the compressed file and start decompression as soon as a unambiguous block is found.
 
+Those two parameters are mutually exclusive, `-s` can only decompress at a location using 1 thread.
+
 ## Limitations
 
 Cannot compress, only decompress. In some files with normal/high compression levels, the program will not return all sequences, but will also tell you how many sequences were not returned.
