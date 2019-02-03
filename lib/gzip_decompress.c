@@ -121,7 +121,7 @@ libdeflate_gzip_decompress(struct libdeflate_decompressor* d,
     decoded_size += size_t((in_end - in) * 3.2) & ~((1UL << 32) - 1);
     // Compression ratio for the deflate stream
     double compression_ratio = double(decoded_size) / double(in_end - in_next - 8);
-    PRINT_DEBUG("Deompressed size %lu, compression factor %f\n", decoded_size, compression_ratio);
+    PRINT_DEBUG("Decompressed size %lu, compression factor %f\n", decoded_size, compression_ratio);
 
     nthreads = std::min(1 + unsigned(in_nbytes >> 23), nthreads);
     if (nthreads <= 1) {
