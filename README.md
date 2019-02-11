@@ -2,6 +2,8 @@
 
 Parallel decompression of gzipped text files.
 
+*NB:* Currently the decompression does not handle large files, this will be sorted soon in the next version.
+
 ## Getting Started
 
 ### Installing
