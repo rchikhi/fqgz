@@ -6,7 +6,7 @@ Proof of concept: decompresses everything, but does not print anything (for the 
 
 *Note:* Currently, decompression can handle files as large as (500 MB) * number of threads, i.e. 2 GB for 4 threads. 
 This is because the current implementation decompreses the whole file at once, loaded in memory.
-Larger files will need to be processed in chunks (still exact decompression, still in parallel), which is an implementation 'detail' that we will release in a couple days.
+Larger files will need to be processed in chunks (still exact decompression, still in parallel), which is an implementation 'detail' that we will release soon.
 
 ## Getting Started
 
