@@ -1,3 +1,5 @@
+# note: as of feb 2019, SRA ftp has changed its directory structure so unfortunately this script doesn't work to redownload the datasets of our paper :( I don't know of a good way to automatically recover them. The list of accessions is: https://github.com/rchikhi/fqgz/blob/master/paper/list_files
+
 #custom script to crawl ENA and get one FASTQ.gz file for all recent experiments
 
 import os
